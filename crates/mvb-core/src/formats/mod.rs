@@ -1,4 +1,5 @@
-//! Readers and writers for the build file formats of other tools.
+//! Readers and writers for the build file formats of other tools, and [`FileFormat`] to pick the
+//! right one (native projects included).
 
 pub mod litematica;
 pub mod sponge;
@@ -10,7 +11,8 @@ use std::io::Read;
 use flate2::read::GzDecoder;
 
 use crate::block::ParseBlockStateError;
-use crate::build::ModelError;
+use crate::build::{Build, ModelError};
+use crate::mvb::{self, MvbError};
 use crate::nbt::{Compound, NbtError, Tag};
 
 /// Refuse to inflate more than this, so a tiny corrupt or malicious file cannot exhaust memory.
@@ -34,6 +36,63 @@ pub enum ImportError {
     BlockState(#[from] ParseBlockStateError),
     #[error(transparent)]
     Model(#[from] ModelError),
+}
+
+/// Every file format the application can open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileFormat {
+    /// Native project (`.mvb`).
+    Project,
+    /// Litematica (`.litematic`).
+    Litematica,
+    /// Sponge / WorldEdit (`.schem`).
+    Sponge,
+    /// Vanilla structure (`.nbt`).
+    Structure,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    #[error(transparent)]
+    Import(#[from] ImportError),
+    #[error(transparent)]
+    Project(#[from] MvbError),
+}
+
+impl FileFormat {
+    pub const ALL: [FileFormat; 4] = [
+        FileFormat::Project,
+        FileFormat::Litematica,
+        FileFormat::Sponge,
+        FileFormat::Structure,
+    ];
+
+    /// File extension, without the dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            FileFormat::Project => "mvb",
+            FileFormat::Litematica => "litematic",
+            FileFormat::Sponge => "schem",
+            FileFormat::Structure => "nbt",
+        }
+    }
+
+    /// Format matching a file extension (without the dot, any case).
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|format| format.extension().eq_ignore_ascii_case(extension))
+    }
+
+    /// Parses the content of a file of this format.
+    pub fn read(self, bytes: &[u8]) -> Result<Build, ReadError> {
+        Ok(match self {
+            FileFormat::Project => mvb::read(bytes)?,
+            FileFormat::Litematica => litematica::read(bytes)?,
+            FileFormat::Sponge => sponge::read(bytes)?,
+            FileFormat::Structure => structure::read(bytes)?,
+        })
+    }
 }
 
 /// Returns the NBT document inside `bytes`, inflating it first if it is gzip-compressed.
@@ -96,6 +155,32 @@ pub(crate) mod test_util {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_are_found_by_extension() {
+        assert_eq!(
+            FileFormat::from_extension("LITEMATIC"),
+            Some(FileFormat::Litematica)
+        );
+        assert_eq!(
+            FileFormat::from_extension("schem"),
+            Some(FileFormat::Sponge)
+        );
+        assert_eq!(FileFormat::from_extension("schematic"), None);
+        for format in FileFormat::ALL {
+            assert_eq!(FileFormat::from_extension(format.extension()), Some(format));
+        }
+    }
+
+    #[test]
+    fn project_files_are_read_through_their_format() {
+        let bytes = mvb::write(&Build::new()).unwrap();
+        assert_eq!(FileFormat::Project.read(&bytes).unwrap(), Build::new());
+        assert!(matches!(
+            FileFormat::Sponge.read(&bytes),
+            Err(ReadError::Import(_))
+        ));
+    }
 
     #[test]
     fn plain_data_is_returned_as_is() {

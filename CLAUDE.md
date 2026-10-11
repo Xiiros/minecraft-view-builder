@@ -16,7 +16,12 @@ Performance first: execution speed, low RAM, small disk footprint. Prefer small,
   - `formats`: other tools' formats (`structure` = vanilla `.nbt`, `sponge` = WorldEdit `.schem` v1-v3, `litematica` = `.litematic`, multi-region), shared gzip/`ImportError` helpers.
   - File readers must treat input as untrusted: check lengths before allocating, return errors, never panic.
   - `examples/inspect.rs`: loads files, prints a summary and checks the `.mvb` round trip (`cargo run --release -p mvb-core --example inspect -- <files>`). Real test data: the game jar (`%APPDATA%\.minecraft\versions\<v>\<v>.jar`) contains ~1200 vanilla structures under `data/minecraft/structure/`.
-- `crates/mvb-app`: egui + wgpu desktop app (binary `mvb`). UI strings live in `src/i18n.rs` (one `Texts` constant per language, English and French).
+- `crates/mvb-app`: egui + wgpu desktop app (binary `mvb`, accepts a file path argument).
+  - `i18n`: UI strings, one `Texts` constant per language (English, French).
+  - `document`: an opened build + derived display data (bounding box, palette colours, visible regions, `layer_cells`).
+  - `colors`: block colour (temporary name hash until the generated colour table exists).
+  - `view2d`: layer view; the layer is one nearest-filtered texture (1 px per block) on a rotated quad, rulers/grid/compass painted on top. `draws_every_rotation_without_panicking` runs it headlessly.
+  - egui's proportional font lacks `▲▼↑↓`: use `⏶⏷⬆⬇`.
 
 ## Commands
 
