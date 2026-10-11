@@ -1,5 +1,6 @@
 //! Readers and writers for the build file formats of other tools.
 
+pub mod sponge;
 pub mod structure;
 
 use std::borrow::Cow;
@@ -7,6 +8,7 @@ use std::io::Read;
 
 use flate2::read::GzDecoder;
 
+use crate::block::ParseBlockStateError;
 use crate::build::ModelError;
 use crate::nbt::{Compound, NbtError, Tag};
 
@@ -23,6 +25,10 @@ pub enum ImportError {
     Nbt(#[from] NbtError),
     #[error("missing or invalid field `{0}`")]
     Field(&'static str),
+    #[error("format version {0} is not supported")]
+    UnsupportedVersion(i32),
+    #[error(transparent)]
+    BlockState(#[from] ParseBlockStateError),
     #[error(transparent)]
     Model(#[from] ModelError),
 }

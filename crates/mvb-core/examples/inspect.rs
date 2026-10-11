@@ -18,6 +18,7 @@ fn load(path: &Path) -> Result<Build, String> {
         .map(str::to_ascii_lowercase);
     match extension.as_deref() {
         Some("nbt") => formats::structure::read(&bytes).map_err(|e| e.to_string()),
+        Some("schem") => formats::sponge::read(&bytes).map_err(|e| e.to_string()),
         Some("mvb") => mvb::read(&bytes).map_err(|e| e.to_string()),
         _ => Err("unsupported extension".into()),
     }
