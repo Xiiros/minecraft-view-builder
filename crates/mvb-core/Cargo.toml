@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 cesu8.workspace = true
+flate2.workspace = true
 thiserror.workspace = true
 zstd.workspace = true
 

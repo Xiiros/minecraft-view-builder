@@ -5,6 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::build::ModelError;
+use crate::nbt::Compound;
 
 /// Namespace assumed when a block name has none (`stone` means `minecraft:stone`).
 pub const DEFAULT_NAMESPACE: &str = "minecraft";
@@ -76,6 +77,37 @@ impl BlockState {
             self.name.as_str(),
             "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
         )
+    }
+}
+
+impl BlockState {
+    /// Reads the `{ Name: String, Properties: { <key>: String } }` compound used by most file formats.
+    pub fn from_nbt(mut compound: Compound) -> Option<Self> {
+        let name = compound.remove("Name")?.into_string()?;
+        let properties = match compound.remove("Properties") {
+            None => Vec::new(),
+            Some(properties) => properties
+                .into_compound()?
+                .into_iter()
+                .map(|(key, value)| Some((key, value.into_string()?)))
+                .collect::<Option<Vec<_>>>()?,
+        };
+        Some(Self::with_properties(name, properties))
+    }
+
+    /// Writes the `{ Name, Properties }` compound, omitting `Properties` when there are none.
+    pub fn to_nbt(&self) -> Compound {
+        let mut compound = Compound::new();
+        compound.insert("Name", self.name.as_str());
+        if !self.properties.is_empty() {
+            let properties: Compound = self
+                .properties
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            compound.insert("Properties", properties);
+        }
+        compound
     }
 }
 

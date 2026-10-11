@@ -1778,6 +1778,7 @@ name = "mvb-core"
 version = "0.1.0"
 dependencies = [
  "cesu8",
+ "flate2",
  "thiserror 2.0.21",
  "zstd",
 ]

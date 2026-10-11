@@ -112,7 +112,7 @@ fn build_to_nbt(build: &Build) -> Compound {
             .palette
             .states()
             .iter()
-            .map(state_to_nbt)
+            .map(|state| Tag::Compound(state.to_nbt()))
             .collect::<Vec<_>>(),
     );
     root.insert(
@@ -121,20 +121,6 @@ fn build_to_nbt(build: &Build) -> Compound {
     );
     root.insert("Extra", build.extra.clone());
     root
-}
-
-fn state_to_nbt(state: &BlockState) -> Tag {
-    let mut entry = Compound::new();
-    entry.insert("Name", state.name());
-    if !state.properties().is_empty() {
-        let properties: Compound = state
-            .properties()
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        entry.insert("Properties", properties);
-    }
-    Tag::Compound(entry)
 }
 
 fn pos_to_nbt(pos: Pos) -> Tag {
@@ -223,7 +209,11 @@ fn build_from_nbt(mut root: Compound) -> Result<Build, MvbError> {
 
     let states = take(&mut root, "Palette", Tag::into_list)?
         .into_iter()
-        .map(|tag| state_from_nbt(tag).ok_or(MvbError::Field("Palette")))
+        .map(|tag| {
+            tag.into_compound()
+                .and_then(BlockState::from_nbt)
+                .ok_or(MvbError::Field("Palette"))
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let regions = take(&mut root, "Regions", Tag::into_list)?
@@ -238,20 +228,6 @@ fn build_from_nbt(mut root: Compound) -> Result<Build, MvbError> {
         regions,
         extra: take(&mut root, "Extra", Tag::into_compound)?,
     })
-}
-
-fn state_from_nbt(tag: Tag) -> Option<BlockState> {
-    let mut entry = tag.into_compound()?;
-    let name = entry.remove("Name")?.into_string()?;
-    let properties = match entry.remove("Properties") {
-        None => Vec::new(),
-        Some(properties) => properties
-            .into_compound()?
-            .into_iter()
-            .map(|(key, value)| Some((key, value.into_string()?)))
-            .collect::<Option<Vec<_>>>()?,
-    };
-    Some(BlockState::with_properties(name, properties))
 }
 
 fn region_from_nbt(tag: Tag) -> Result<Region, MvbError> {
