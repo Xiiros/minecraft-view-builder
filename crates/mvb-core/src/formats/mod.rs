@@ -1,5 +1,6 @@
 //! Readers and writers for the build file formats of other tools.
 
+pub mod litematica;
 pub mod sponge;
 pub mod structure;
 
@@ -27,6 +28,8 @@ pub enum ImportError {
     Field(&'static str),
     #[error("format version {0} is not supported")]
     UnsupportedVersion(i32),
+    #[error("files from before Minecraft 1.13 are not supported")]
+    PreFlattening,
     #[error(transparent)]
     BlockState(#[from] ParseBlockStateError),
     #[error(transparent)]
