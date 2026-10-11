@@ -1,4 +1,4 @@
-﻿# CLAUDE.md
+# CLAUDE.md
 
 Desktop viewer for block-based builds (Java Edition 1.13+ schematics), written in Rust. The user speaks French: talk to them in French; code, comments, commit messages and docs are in English.
 
