@@ -23,6 +23,8 @@ Performance first: execution speed, low RAM, small disk footprint. Prefer small,
   - `block_colors.rs`: **generated**, do not edit. Regenerate after a game update with `cargo run --release -p colorgen -- <path to the client .jar>`.
 - `tools/colorgen`: dev tool (not shipped). Reads the client jar: blockstate → unrotated variant model → parents → texture of the highest `up` face and of the first largest element's side → linear-light average of opaque pixels, first animation frame, biome tint (plains) for tinted faces. Only colour values are committed, never textures.
   - `view2d`: layer view; the layer is one nearest-filtered texture (1 px per block) on a rotated quad, rulers/grid/compass painted on top. `draws_every_rotation_without_panicking` runs it headlessly.
+  - 3D view: `scene` (CPU: voxel grid of the shown layers/regions, mesh of faces whose neighbour is empty with per-face shade baked into vertex colours, DDA ray picking), `camera` (orbit camera, glam `camera::rh` with the DirectX/WebGPU projection), `render3d` + `view3d.wgsl` (wgpu pipeline drawn inside egui's pass through `egui_wgpu::Callback`; mesh re-uploaded only when its generation changes), `view3d` (input, tooltip). eframe is started with `depth_buffer: 32` and `multisampling: 4`; the pipeline must match (`render3d::DEPTH_BITS`, `MSAA_SAMPLES`).
+  - Visibility of layers in 3D is `Document::layer_visible`; changing it or `region_visible` rebuilds the scene (fine for builds of thousands of blocks).
   - egui's proportional font lacks `▲▼↑↓`: use `⏶⏷⬆⬇`.
 
 ## Commands

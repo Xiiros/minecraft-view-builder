@@ -6,7 +6,7 @@ use eframe::egui::Color32;
 use mvb_core::formats::{FileFormat, ReadError};
 use mvb_core::{Build, Palette, Pos};
 
-use crate::colors::block_color;
+use crate::colors::{FaceColors, block_colors};
 
 #[derive(Debug)]
 pub enum OpenError {
@@ -23,9 +23,11 @@ pub struct Document {
     pub min: Pos,
     /// Bounding box size along x, y and z.
     pub size: [u32; 3],
-    /// Colour of each palette entry, `None` for blocks that are not drawn.
-    pub colors: Vec<Option<Color32>>,
+    /// Colours of each palette entry, `None` for blocks that are not drawn.
+    pub colors: Vec<Option<FaceColors>>,
     pub region_visible: Vec<bool>,
+    /// Layers shown in the 3D view, from the bottom.
+    pub layer_visible: Vec<bool>,
     /// Number of drawn blocks.
     pub block_count: usize,
 }
@@ -61,7 +63,7 @@ impl Document {
             }
             None => (Pos::default(), [0; 3]),
         };
-        let colors: Vec<_> = build.palette.states().iter().map(block_color).collect();
+        let colors: Vec<_> = build.palette.states().iter().map(block_colors).collect();
         let block_count = build
             .regions
             .iter()
@@ -75,6 +77,7 @@ impl Document {
         };
         Self {
             region_visible: vec![true; build.regions.len()],
+            layer_visible: vec![true; size[1] as usize],
             build,
             title,
             min,
@@ -84,8 +87,14 @@ impl Document {
         }
     }
 
-    pub fn color(&self, block: u16) -> Option<Color32> {
+    /// Colours of a palette entry, `None` for blocks that are not drawn.
+    pub fn colors(&self, block: u16) -> Option<FaceColors> {
         self.colors.get(usize::from(block)).copied().flatten()
+    }
+
+    /// Colour of a palette entry seen from above.
+    pub fn color(&self, block: u16) -> Option<Color32> {
+        self.colors(block).map(|c| c.top)
     }
 
     /// Palette indices of one layer (`y` counted from the bottom of the build), x varying

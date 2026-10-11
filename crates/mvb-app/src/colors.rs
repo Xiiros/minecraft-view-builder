@@ -6,12 +6,19 @@ use mvb_core::BlockState;
 
 use crate::block_colors::BLOCK_COLORS;
 
-/// Colour of a block seen from above, or `None` for blocks that are not drawn (air, structure voids).
+/// Colours of the top and side faces of a block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FaceColors {
+    pub top: Color32,
+    pub side: Color32,
+}
+
+/// Colours of a block, or `None` for blocks that are not drawn (air, structure voids).
 ///
 /// Vanilla blocks use the table generated from the game's textures. A log, pillar or chain lying
-/// along x or z shows its side upwards, so it takes the side colour. Blocks missing from the table
-/// (mods, blocks newer than the table) get a stable colour derived from their name.
-pub fn block_color(state: &BlockState) -> Option<Color32> {
+/// along x or z shows its side upwards, so its top takes the side colour. Blocks missing from the
+/// table (mods, blocks newer than the table) get a stable colour derived from their name.
+pub fn block_colors(state: &BlockState) -> Option<FaceColors> {
     if !state.is_visible() {
         return None;
     }
@@ -21,9 +28,24 @@ pub fn block_color(state: &BlockState) -> Option<Color32> {
             .binary_search_by(|(name, ..)| name.cmp(&path))
             .ok()?;
         let (_, top, side) = BLOCK_COLORS[index];
-        Some(if lying { side } else { top })
+        Some(FaceColors {
+            top: rgb(if lying { side } else { top }),
+            side: rgb(side),
+        })
     });
-    Some(from_table.map_or_else(|| name_color(state.name()), rgb))
+    Some(from_table.unwrap_or_else(|| {
+        let color = name_color(state.name());
+        FaceColors {
+            top: color,
+            side: color,
+        }
+    }))
+}
+
+/// Colour of a block seen from above.
+#[cfg(test)]
+fn block_color(state: &BlockState) -> Option<Color32> {
+    block_colors(state).map(|c| c.top)
 }
 
 fn rgb(color: u32) -> Color32 {
@@ -81,6 +103,12 @@ mod tests {
     fn invisible_blocks_have_no_colour() {
         assert_eq!(block_color(&BlockState::air()), None);
         assert_eq!(block_color(&BlockState::new("structure_void")), None);
+    }
+
+    #[test]
+    fn side_colour_comes_from_the_table() {
+        let grass = block_colors(&BlockState::new("grass_block")).unwrap();
+        assert_ne!(grass.top, grass.side);
     }
 
     #[test]

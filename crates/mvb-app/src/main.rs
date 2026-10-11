@@ -2,10 +2,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod block_colors;
+mod camera;
 mod colors;
 mod document;
 mod i18n;
+mod render3d;
+mod scene;
 mod view2d;
+mod view3d;
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +18,9 @@ use mvb_core::formats::FileFormat;
 
 use document::{Document, OpenError};
 use i18n::{Language, Texts};
+use render3d::Renderer3d;
 use view2d::{Hovered, View2d, ZOOM_STEP};
+use view3d::View3d;
 
 /// Display name of the application. The final name is not chosen yet.
 const APP_NAME: &str = "MVB";
@@ -26,6 +32,8 @@ fn main() -> eframe::Result {
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([800.0, 500.0])
             .with_drag_and_drop(true),
+        depth_buffer: render3d::DEPTH_BITS,
+        multisampling: render3d::MSAA_SAMPLES,
         ..Default::default()
     };
     // A file given on the command line (or by "Open with") is opened at start-up.
@@ -35,6 +43,10 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             let mut app = App::new();
+            if let Some(render_state) = &cc.wgpu_render_state {
+                Renderer3d::install(render_state);
+                app.gpu_3d = true;
+            }
             if let Some(path) = initial_file {
                 app.open(&cc.egui_ctx, &path);
             }
@@ -51,10 +63,20 @@ fn window_title(document: Option<&str>) -> String {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Layer2d,
+    View3d,
+}
+
 struct App {
     language: Language,
     document: Option<Document>,
-    view: View2d,
+    mode: Mode,
+    view2d: View2d,
+    view3d: View3d,
+    /// False when the 3D renderer could not be created.
+    gpu_3d: bool,
     /// Block under the pointer during the previous frame, shown in the status bar.
     hovered: Option<Hovered>,
     error: Option<(PathBuf, OpenError)>,
@@ -65,7 +87,10 @@ impl App {
         Self {
             language: Language::detect(),
             document: None,
-            view: View2d::default(),
+            mode: Mode::Layer2d,
+            view2d: View2d::default(),
+            view3d: View3d::default(),
+            gpu_3d: false,
             hovered: None,
             error: None,
         }
@@ -78,7 +103,8 @@ impl App {
                     &document.title,
                 ))));
                 self.document = Some(document);
-                self.view = View2d::default();
+                self.view2d = View2d::default();
+                self.view3d = View3d::default();
                 self.hovered = None;
             }
             Err(error) => self.error = Some((path.to_owned(), error)),
@@ -124,7 +150,10 @@ impl App {
         });
     }
 
-    fn side_panel(ui: &mut egui::Ui, texts: &Texts, document: &mut Document, view: &mut View2d) {
+    fn side_panel(&mut self, ui: &mut egui::Ui, texts: &Texts) {
+        let Some(document) = &mut self.document else {
+            return;
+        };
         ui.add_space(4.0);
         ui.heading(&document.title);
         egui::Grid::new("build_info").num_columns(2).show(ui, |ui| {
@@ -142,9 +171,45 @@ impl App {
             ui.end_row();
         });
 
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.mode, Mode::Layer2d, texts.view_2d);
+            ui.selectable_value(&mut self.mode, Mode::View3d, texts.view_3d);
+        });
+        ui.separator();
+
+        match self.mode {
+            Mode::Layer2d => Self::view_2d_controls(ui, texts, document, &mut self.view2d),
+            Mode::View3d => {
+                if ui.button(texts.reset_view).clicked() {
+                    self.view3d.reset();
+                }
+            }
+        }
+
+        if document.build.regions.len() > 1 {
+            ui.separator();
+            ui.strong(texts.regions);
+            let regions = document.build.regions.iter();
+            for (i, (region, visible)) in regions.zip(&mut document.region_visible).enumerate() {
+                let name = if region.name.is_empty() {
+                    format!("{} {}", texts.region_fallback, i + 1)
+                } else {
+                    region.name.clone()
+                };
+                ui.checkbox(visible, name);
+            }
+        }
+
+        if self.mode == Mode::View3d {
+            ui.separator();
+            Self::layer_list(ui, texts, document);
+        }
+    }
+
+    fn view_2d_controls(ui: &mut egui::Ui, texts: &Texts, document: &Document, view: &mut View2d) {
         let height = document.size[1];
         if height > 0 {
-            ui.separator();
             ui.strong(texts.layer);
             ui.horizontal(|ui| {
                 let down = ui.add_enabled(view.layer > 0, egui::Button::new("⏷"));
@@ -159,9 +224,9 @@ impl App {
                 ui.weak(format!("y = {}", view.layer));
             });
             ui.add(egui::Slider::new(&mut view.layer, 0..=height - 1).show_value(false));
+            ui.separator();
         }
 
-        ui.separator();
         ui.strong(texts.view);
         ui.horizontal(|ui| {
             if ui.button("−").on_hover_text(texts.zoom_out).clicked() {
@@ -182,20 +247,30 @@ impl App {
         }
         ui.checkbox(&mut view.show_below, texts.show_below);
         ui.checkbox(&mut view.show_grid, texts.show_grid);
+    }
 
-        if document.build.regions.len() > 1 {
-            ui.separator();
-            ui.strong(texts.regions);
-            let regions = document.build.regions.iter();
-            for (i, (region, visible)) in regions.zip(&mut document.region_visible).enumerate() {
-                let name = if region.name.is_empty() {
-                    format!("{} {}", texts.region_fallback, i + 1)
-                } else {
-                    region.name.clone()
-                };
-                ui.checkbox(visible, name);
+    /// Checkbox per layer for the 3D view, top layer first like in the game.
+    fn layer_list(ui: &mut egui::Ui, texts: &Texts, document: &mut Document) {
+        ui.strong(texts.visible_layers);
+        ui.horizontal(|ui| {
+            if ui.button(texts.all_layers).clicked() {
+                document.layer_visible.fill(true);
             }
-        }
+            if ui.button(texts.no_layers).clicked() {
+                document.layer_visible.fill(false);
+            }
+            if ui.button(texts.invert_layers).clicked() {
+                document.layer_visible.iter_mut().for_each(|v| *v = !*v);
+            }
+        });
+        egui::ScrollArea::vertical()
+            .id_salt("layer_list")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for (y, visible) in document.layer_visible.iter_mut().enumerate().rev() {
+                    ui.checkbox(visible, format!("{} {} · y = {y}", texts.layer, y + 1));
+                }
+            });
     }
 
     fn status_bar(&self, ui: &mut egui::Ui, texts: &Texts) {
@@ -209,7 +284,10 @@ impl App {
                 ui.label(format!("{name} — x {} · y {} · z {}", h.x, h.y, h.z));
             }
             None => {
-                ui.weak(texts.status_hint);
+                ui.weak(match self.mode {
+                    Mode::Layer2d => texts.status_hint,
+                    Mode::View3d => texts.status_hint_3d,
+                });
             }
         }
     }
@@ -271,19 +349,26 @@ impl eframe::App for App {
             egui::Panel::bottom("status_bar").show(ui, |ui| self.status_bar(ui, texts));
         }
 
-        match &mut self.document {
+        if self.document.is_some() {
+            egui::Panel::left("side_panel")
+                .resizable(false)
+                .exact_size(240.0)
+                .show(ui, |ui| self.side_panel(ui, texts));
+        }
+        let central = egui::CentralPanel::default();
+        match &self.document {
             Some(document) => {
-                let view = &mut self.view;
-                egui::Panel::left("side_panel")
-                    .resizable(false)
-                    .exact_size(240.0)
-                    .show(ui, |ui| Self::side_panel(ui, texts, document, view));
-                self.hovered = egui::CentralPanel::default()
-                    .show(ui, |ui| view.ui(ui, document, texts))
-                    .inner;
+                self.hovered = match self.mode {
+                    Mode::Layer2d => central.show(ui, |ui| self.view2d.ui(ui, document, texts)),
+                    Mode::View3d => {
+                        let gpu = self.gpu_3d;
+                        central.show(ui, |ui| self.view3d.ui(ui, document, texts, gpu))
+                    }
+                }
+                .inner;
             }
             None => {
-                egui::CentralPanel::default().show(ui, |ui| self.empty_state(ui, texts));
+                central.show(ui, |ui| self.empty_state(ui, texts));
             }
         }
 
