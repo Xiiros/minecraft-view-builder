@@ -11,7 +11,7 @@ Performance first: execution speed, low RAM, small disk footprint. Prefer small,
 - `crates/mvb-core`: data model and file formats. No GPU/UI dependency; everything here must be unit tested.
   - `nbt`: NBT codec (Java, big-endian, modified UTF-8), hardened against malformed input.
   - `block`: `BlockState` (name + sorted properties) and `Palette` (index 0 is always air).
-  - `build`: `Build` â†’ `Region`s of `u16` palette indices, layer-major (`(y * size_z + z) * size_x + x`), plus block entities, entities and `extra` NBT kept for lossless re-export.
+  - `build`: `Build` → `Region`s of `u16` palette indices, layer-major (`(y * size_z + z) * size_x + x`), plus block entities, entities and `extra` NBT kept for lossless re-export.
   - `mvb`: native project format (magic + version + zstd NBT); the layout is documented at the top of the file.
   - `formats`: other tools' formats (`structure` = vanilla `.nbt`, `sponge` = WorldEdit `.schem` v1-v3), shared gzip/`ImportError` helpers.
   - File readers must treat input as untrusted: check lengths before allocating, return errors, never panic.
