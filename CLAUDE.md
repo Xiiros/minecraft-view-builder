@@ -19,7 +19,9 @@ Performance first: execution speed, low RAM, small disk footprint. Prefer small,
 - `crates/mvb-app`: egui + wgpu desktop app (binary `mvb`, accepts a file path argument).
   - `i18n`: UI strings, one `Texts` constant per language (English, French).
   - `document`: an opened build + derived display data (bounding box, palette colours, visible regions, `layer_cells`).
-  - `colors`: block colour (temporary name hash until the generated colour table exists).
+  - `colors`: block colour from `block_colors.rs` (top colour, or side colour for logs lying along x/z), name hash for unknown blocks.
+  - `block_colors.rs`: **generated**, do not edit. Regenerate after a game update with `cargo run --release -p colorgen -- <path to the client .jar>`.
+- `tools/colorgen`: dev tool (not shipped). Reads the client jar: blockstate → unrotated variant model → parents → texture of the highest `up` face and of the first largest element's side → linear-light average of opaque pixels, first animation frame, biome tint (plains) for tinted faces. Only colour values are committed, never textures.
   - `view2d`: layer view; the layer is one nearest-filtered texture (1 px per block) on a rotated quad, rulers/grid/compass painted on top. `draws_every_rotation_without_panicking` runs it headlessly.
   - egui's proportional font lacks `▲▼↑↓`: use `⏶⏷⬆⬇`.
 
