@@ -13,6 +13,7 @@ repository = "https://github.com/Xiiros/minecraft-view-builder"
 mvb-core = { path = "crates/mvb-core" }
 cesu8 = "1.1.0"
 eframe = "0.36.2"
+flate2 = "1.1.10"
 sys-locale = "0.3.2"
 thiserror = "2.0.21"
 zstd = { version = "0.14.2", default-features = false }

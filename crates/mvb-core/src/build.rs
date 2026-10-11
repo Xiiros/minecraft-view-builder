@@ -31,8 +31,11 @@ impl Size {
         Self { x, y, z }
     }
 
+    /// Number of blocks, saturating at `u64::MAX` (sizes read from files can be absurd).
     pub const fn volume(self) -> u64 {
-        self.x as u64 * self.y as u64 * self.z as u64
+        (self.x as u64)
+            .saturating_mul(self.y as u64)
+            .saturating_mul(self.z as u64)
     }
 }
 
@@ -172,7 +175,7 @@ impl Region {
     }
 }
 
-fn checked_volume(size: Size) -> Result<usize, ModelError> {
+pub(crate) fn checked_volume(size: Size) -> Result<usize, ModelError> {
     let volume = size.volume();
     if volume > MAX_REGION_VOLUME {
         return Err(ModelError::VolumeTooLarge(volume));
@@ -288,6 +291,12 @@ mod tests {
                 actual: 1
             })
         );
+    }
+
+    #[test]
+    fn volume_never_overflows() {
+        assert_eq!(Size::new(u32::MAX, u32::MAX, u32::MAX).volume(), u64::MAX);
+        assert!(Region::new("huge", Pos::default(), Size::new(u32::MAX, u32::MAX, 2)).is_err());
     }
 
     #[test]
