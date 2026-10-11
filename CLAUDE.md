@@ -9,6 +9,11 @@ Performance first: execution speed, low RAM, small disk footprint. Prefer small,
 ## Layout
 
 - `crates/mvb-core`: data model and file formats. No GPU/UI dependency; everything here must be unit tested.
+  - `nbt`: NBT codec (Java, big-endian, modified UTF-8), hardened against malformed input.
+  - `block`: `BlockState` (name + sorted properties) and `Palette` (index 0 is always air).
+  - `build`: `Build` → `Region`s of `u16` palette indices, layer-major (`(y * size_z + z) * size_x + x`), plus block entities, entities and `extra` NBT kept for lossless re-export.
+  - `mvb`: native project format (magic + version + zstd NBT); the layout is documented at the top of the file.
+  - File readers must treat input as untrusted: check lengths before allocating, return errors, never panic.
 - `crates/mvb-app`: egui + wgpu desktop app (binary `mvb`). UI strings live in `src/i18n.rs` (one `Texts` constant per language, English and French).
 
 ## Commands
@@ -26,6 +31,8 @@ CI (`.github/workflows/ci.yml`) runs fmt, clippy (warnings are errors) and tests
 
 - One branch per feature (`feat/...`, `fix/...`, `chore/...`), opened as a GitHub PR into `developpement`.
 - Merge the PR once CI is green. When `developpement` is validated, open a PR from `developpement` into `main`.
+- Merge methods: **squash** for feature branches into `developpement`, **merge commit** for `developpement` into `main` (a squash there would make the two histories diverge).
+- `developpement` and `main` are protected: PR required, the 4 CI checks must pass, no force-push.
 - Commit messages in English, prefixed with `feat:`, `fix:` or `chore:` (tooling/config only).
 
 ## Versioning

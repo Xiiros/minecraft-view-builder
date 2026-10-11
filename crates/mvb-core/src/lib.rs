@@ -2,6 +2,14 @@
 //!
 //! This crate has no GPU or UI dependency so that everything in it can be unit tested headlessly.
 
+pub mod block;
+pub mod build;
+pub mod mvb;
+pub mod nbt;
+
+pub use block::{BlockState, Palette};
+pub use build::{BlockEntity, Build, Entity, Metadata, ModelError, Pos, Region, Size};
+
 /// Version of the application, shared by every crate of the workspace.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
