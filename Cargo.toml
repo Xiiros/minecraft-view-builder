@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/mvb-core", "crates/mvb-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Alexis Meyer"]
+repository = "https://github.com/Xiiros/minecraft-view-builder"
+
+[workspace.dependencies]
+mvb-core = { path = "crates/mvb-core" }
+eframe = "0.36.2"
+sys-locale = "0.3.2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Release builds favour speed and binary size over compile time.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# Dependencies (wgpu, egui...) are optimized even in debug builds so the app stays usable while developing.
+[profile.dev.package."*"]
+opt-level = 2
