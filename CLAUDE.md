@@ -13,7 +13,7 @@ Performance first: execution speed, low RAM, small disk footprint. Prefer small,
   - `block`: `BlockState` (name + sorted properties) and `Palette` (index 0 is always air).
   - `build`: `Build` → `Region`s of `u16` palette indices, layer-major (`(y * size_z + z) * size_x + x`), plus block entities, entities and `extra` NBT kept for lossless re-export.
   - `mvb`: native project format (magic + version + zstd NBT); the layout is documented at the top of the file.
-  - `formats`: other tools' formats (`structure` = vanilla `.nbt`, `sponge` = WorldEdit `.schem` v1-v3), shared gzip/`ImportError` helpers.
+  - `formats`: other tools' formats (`structure` = vanilla `.nbt`, `sponge` = WorldEdit `.schem` v1-v3, `litematica` = `.litematic`, multi-region), shared gzip/`ImportError` helpers.
   - File readers must treat input as untrusted: check lengths before allocating, return errors, never panic.
   - `examples/inspect.rs`: loads files, prints a summary and checks the `.mvb` round trip (`cargo run --release -p mvb-core --example inspect -- <files>`). Real test data: the game jar (`%APPDATA%\.minecraft\versions\<v>\<v>.jar`) contains ~1200 vanilla structures under `data/minecraft/structure/`.
 - `crates/mvb-app`: egui + wgpu desktop app (binary `mvb`). UI strings live in `src/i18n.rs` (one `Texts` constant per language, English and French).
