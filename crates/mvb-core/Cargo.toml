@@ -1,0 +1,13 @@
+[package]
+name = "mvb-core"
+description = "Data model and file formats for block-based builds (no GPU dependency)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
