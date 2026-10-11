@@ -78,6 +78,36 @@ impl BlockState {
             "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
         )
     }
+
+    /// False for blocks that are neither drawn nor placed: air and structure voids.
+    pub fn is_visible(&self) -> bool {
+        !self.is_air() && self.name != "minecraft:structure_void"
+    }
+
+    /// Human-readable name: `minecraft:oak_stairs` gives `Oak Stairs`, `create:shaft` gives `Shaft (create)`.
+    pub fn display_name(&self) -> String {
+        let (namespace, path) = self
+            .name
+            .split_once(':')
+            .unwrap_or((DEFAULT_NAMESPACE, &self.name));
+        let mut words = String::with_capacity(path.len() + namespace.len() + 3);
+        for word in path.split(['_', '/']).filter(|w| !w.is_empty()) {
+            if !words.is_empty() {
+                words.push(' ');
+            }
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                words.extend(first.to_uppercase());
+                words.push_str(chars.as_str());
+            }
+        }
+        if namespace != DEFAULT_NAMESPACE {
+            words.push_str(" (");
+            words.push_str(namespace);
+            words.push(')');
+        }
+        words
+    }
 }
 
 impl BlockState {
@@ -352,6 +382,24 @@ mod tests {
     fn recognises_air_variants() {
         assert!(BlockState::new("cave_air").is_air());
         assert!(!BlockState::new("glass").is_air());
+    }
+
+    #[test]
+    fn air_and_structure_voids_are_invisible() {
+        assert!(!BlockState::air().is_visible());
+        assert!(!BlockState::new("structure_void").is_visible());
+        assert!(BlockState::new("barrier").is_visible());
+    }
+
+    #[test]
+    fn display_names_are_readable() {
+        let stairs: BlockState = "oak_stairs[facing=east]".parse().unwrap();
+        assert_eq!(stairs.display_name(), "Oak Stairs");
+        assert_eq!(BlockState::new("tnt").display_name(), "Tnt");
+        assert_eq!(
+            BlockState::new("create:shaft").display_name(),
+            "Shaft (create)"
+        );
     }
 
     #[test]

@@ -8,21 +8,17 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use mvb_core::{Build, formats, mvb};
+use mvb_core::formats::FileFormat;
+use mvb_core::{Build, mvb};
 
 fn load(path: &Path) -> Result<Build, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let extension = path
+    let format = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase);
-    match extension.as_deref() {
-        Some("nbt") => formats::structure::read(&bytes).map_err(|e| e.to_string()),
-        Some("schem") => formats::sponge::read(&bytes).map_err(|e| e.to_string()),
-        Some("litematic") => formats::litematica::read(&bytes).map_err(|e| e.to_string()),
-        Some("mvb") => mvb::read(&bytes).map_err(|e| e.to_string()),
-        _ => Err("unsupported extension".into()),
-    }
+        .and_then(FileFormat::from_extension)
+        .ok_or("unsupported extension")?;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    format.read(&bytes).map_err(|e| e.to_string())
 }
 
 fn summary(build: &Build) -> String {
