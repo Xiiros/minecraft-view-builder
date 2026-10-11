@@ -1,6 +1,7 @@
 // Hide the console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod block_colors;
 mod colors;
 mod document;
 mod i18n;
