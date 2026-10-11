@@ -411,7 +411,7 @@ impl View2d {
 }
 
 /// Floating box describing the block under the pointer, shown without delay.
-fn block_tooltip(ctx: &egui::Context, pointer: Pos2, doc: &Document, hovered: Hovered) {
+pub fn block_tooltip(ctx: &egui::Context, pointer: Pos2, doc: &Document, hovered: Hovered) {
     let Some(state) = doc.build.palette.get(hovered.block) else {
         return;
     };

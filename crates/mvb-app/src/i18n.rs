@@ -82,6 +82,15 @@ pub struct Texts {
     pub show_grid: &'static str,
 
     pub status_hint: &'static str,
+
+    pub view_2d: &'static str,
+    pub view_3d: &'static str,
+    pub visible_layers: &'static str,
+    pub all_layers: &'static str,
+    pub no_layers: &'static str,
+    pub invert_layers: &'static str,
+    pub status_hint_3d: &'static str,
+    pub error_no_gpu: &'static str,
 }
 
 const EN: Texts = Texts {
@@ -121,6 +130,15 @@ const EN: Texts = Texts {
     show_grid: "Grid",
 
     status_hint: "Wheel: zoom · Drag: move · ⬆ / ⬇: change layer",
+
+    view_2d: "2D layer",
+    view_3d: "3D",
+    visible_layers: "Visible layers",
+    all_layers: "All",
+    no_layers: "None",
+    invert_layers: "Invert",
+    status_hint_3d: "Left drag: orbit · Right drag: move · Wheel: zoom",
+    error_no_gpu: "The 3D view is not available on this graphics card.",
 };
 
 const FR: Texts = Texts {
@@ -160,6 +178,15 @@ const FR: Texts = Texts {
     show_grid: "Grille",
 
     status_hint: "Molette : zoom · Glisser : déplacer · ⬆ / ⬇ : changer de couche",
+
+    view_2d: "Couche 2D",
+    view_3d: "3D",
+    visible_layers: "Couches affichées",
+    all_layers: "Toutes",
+    no_layers: "Aucune",
+    invert_layers: "Inverser",
+    status_hint_3d: "Clic gauche glissé : tourner · Clic droit glissé : déplacer · Molette : zoom",
+    error_no_gpu: "La vue 3D n'est pas disponible avec cette carte graphique.",
 };
 
 #[cfg(test)]
