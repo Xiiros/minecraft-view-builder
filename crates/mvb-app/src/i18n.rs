@@ -91,6 +91,19 @@ pub struct Texts {
     pub invert_layers: &'static str,
     pub status_hint_3d: &'static str,
     pub error_no_gpu: &'static str,
+
+    pub menu_view: &'static str,
+    pub show_materials: &'static str,
+    pub materials: &'static str,
+    pub scope_layer: &'static str,
+    pub scope_total: &'static str,
+    pub items: &'static str,
+    pub kinds: &'static str,
+    pub copy_list: &'static str,
+    pub column_block: &'static str,
+    pub column_count: &'static str,
+    pub column_stacks: &'static str,
+    pub no_materials: &'static str,
 }
 
 const EN: Texts = Texts {
@@ -139,6 +152,19 @@ const EN: Texts = Texts {
     invert_layers: "Invert",
     status_hint_3d: "Left drag: orbit · Right drag: move · Wheel: zoom",
     error_no_gpu: "The 3D view is not available on this graphics card.",
+
+    menu_view: "View",
+    show_materials: "Materials list",
+    materials: "Materials",
+    scope_layer: "This layer",
+    scope_total: "Whole build",
+    items: "items",
+    kinds: "kinds",
+    copy_list: "Copy the list",
+    column_block: "Block",
+    column_count: "Count",
+    column_stacks: "Stacks",
+    no_materials: "Nothing to place here.",
 };
 
 const FR: Texts = Texts {
@@ -187,6 +213,19 @@ const FR: Texts = Texts {
     invert_layers: "Inverser",
     status_hint_3d: "Clic gauche glissé : tourner · Clic droit glissé : déplacer · Molette : zoom",
     error_no_gpu: "La vue 3D n'est pas disponible avec cette carte graphique.",
+
+    menu_view: "Affichage",
+    show_materials: "Liste des matériaux",
+    materials: "Matériaux",
+    scope_layer: "Cette couche",
+    scope_total: "Toute la construction",
+    items: "objets",
+    kinds: "types",
+    copy_list: "Copier la liste",
+    column_block: "Bloc",
+    column_count: "Quantité",
+    column_stacks: "Piles",
+    no_materials: "Rien à poser ici.",
 };
 
 #[cfg(test)]

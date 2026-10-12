@@ -4,6 +4,7 @@ use std::path::Path;
 
 use eframe::egui::Color32;
 use mvb_core::formats::{FileFormat, ReadError};
+use mvb_core::materials::MaterialIndex;
 use mvb_core::{Build, Palette, Pos};
 
 use crate::colors::{FaceColors, block_colors};
@@ -30,6 +31,8 @@ pub struct Document {
     pub shapes: Vec<Shape>,
     /// Direction of each palette entry that has one (`facing` property).
     pub facings: Vec<Option<Facing>>,
+    /// Item placed for each palette entry, for the materials list.
+    pub materials: MaterialIndex,
     pub region_visible: Vec<bool>,
     /// Layers shown in the 3D view, from the bottom.
     pub layer_visible: Vec<bool>,
@@ -71,6 +74,7 @@ impl Document {
         let colors: Vec<_> = build.palette.states().iter().map(block_colors).collect();
         let shapes = build.palette.states().iter().map(Shape::of).collect();
         let facings = build.palette.states().iter().map(Facing::of).collect();
+        let materials = MaterialIndex::new(&build.palette);
         let block_count = build
             .regions
             .iter()
@@ -92,6 +96,7 @@ impl Document {
             colors,
             shapes,
             facings,
+            materials,
             block_count,
         }
     }
