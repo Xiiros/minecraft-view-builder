@@ -8,6 +8,7 @@ use glam::Vec3;
 use mvb_core::Palette;
 
 use crate::document::Document;
+use crate::shapes::{Box16, Shape};
 
 /// One corner of a face, as uploaded to the GPU: position then sRGB colour, 16 bytes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,6 +88,18 @@ const FACES: [Face; 6] = [
     },
 ];
 
+/// True when the face of `bounds` with this normal lies on the block's boundary.
+fn on_boundary(bounds: Box16, normal: [i64; 3]) -> bool {
+    match normal {
+        [1, _, _] => bounds[3] == 16,
+        [-1, _, _] => bounds[0] == 0,
+        [_, 1, _] => bounds[4] == 16,
+        [_, -1, _] => bounds[1] == 0,
+        [_, _, 1] => bounds[5] == 16,
+        _ => bounds[2] == 0,
+    }
+}
+
 fn shaded(color: Color32, shade: f32) -> [u8; 4] {
     let scale = |c: u8| (f32::from(c) * shade).round() as u8;
     [scale(color.r()), scale(color.g()), scale(color.b()), 255]
@@ -131,39 +144,52 @@ impl Scene {
         self.cells[((y * d + z) * w + x) as usize]
     }
 
-    /// One quad per face whose neighbour is empty.
+    /// One quad per face of each box of each block's shape. A face lying on the block's boundary
+    /// is skipped when the neighbour on that side is a full cube, which hides it.
     fn build_mesh(&self, doc: &Document) -> Mesh {
         let mut mesh = Mesh::default();
+        let shape = |block: u16| doc.shapes.get(usize::from(block));
+        let is_full =
+            |block: u16| doc.colors(block).is_some() && shape(block).is_some_and(Shape::is_full);
         let [w, h, d] = self.size.map(i64::from);
         for y in 0..h {
             for z in 0..d {
                 for x in 0..w {
                     let block = self.get(x, y, z);
-                    let Some(colors) = doc.colors(block) else {
+                    let (Some(colors), Some(shape)) = (doc.colors(block), shape(block)) else {
                         continue;
                     };
-                    for face in &FACES {
-                        let [nx, ny, nz] = face.normal;
-                        if doc.colors(self.get(x + nx, y + ny, z + nz)).is_some() {
-                            continue;
+                    for &bounds in &shape.boxes {
+                        let [x0, y0, z0, x1, y1, z1] = bounds.map(|v| f32::from(v) / 16.0);
+                        for face in &FACES {
+                            let [nx, ny, nz] = face.normal;
+                            if on_boundary(bounds, face.normal)
+                                && is_full(self.get(x + nx, y + ny, z + nz))
+                            {
+                                continue;
+                            }
+                            let color =
+                                shaded(if face.top { colors.top } else { colors.side }, face.shade);
+                            let first = mesh.vertices.len() as u32;
+                            for [cx, cy, cz] in face.corners {
+                                mesh.vertices.push(Vertex {
+                                    position: [
+                                        x as f32 + x0 + cx * (x1 - x0),
+                                        y as f32 + y0 + cy * (y1 - y0),
+                                        z as f32 + z0 + cz * (z1 - z0),
+                                    ],
+                                    color,
+                                });
+                            }
+                            mesh.indices.extend([
+                                first,
+                                first + 1,
+                                first + 2,
+                                first,
+                                first + 2,
+                                first + 3,
+                            ]);
                         }
-                        let color =
-                            shaded(if face.top { colors.top } else { colors.side }, face.shade);
-                        let first = mesh.vertices.len() as u32;
-                        for [cx, cy, cz] in face.corners {
-                            mesh.vertices.push(Vertex {
-                                position: [x as f32 + cx, y as f32 + cy, z as f32 + cz],
-                                color,
-                            });
-                        }
-                        mesh.indices.extend([
-                            first,
-                            first + 1,
-                            first + 2,
-                            first,
-                            first + 2,
-                            first + 3,
-                        ]);
                     }
                 }
             }
@@ -279,6 +305,32 @@ mod tests {
         assert_eq!(scene.mesh.vertices.len(), 30 * 4);
         doc.layer_visible = vec![false; 2];
         assert!(Scene::new(&doc).mesh.indices.is_empty());
+    }
+
+    #[test]
+    fn partial_blocks_do_not_hide_their_neighbours() {
+        let mut build = Build::new();
+        let stone = build
+            .palette
+            .get_or_insert(BlockState::new("stone"))
+            .unwrap();
+        let slab: BlockState = "stone_slab[type=bottom]".parse().unwrap();
+        let slab = build.palette.get_or_insert(slab).unwrap();
+        let region =
+            Region::from_blocks("r", Pos::default(), Size::new(2, 1, 1), vec![stone, slab])
+                .unwrap();
+        build.regions.push(region);
+        let scene = Scene::new(&Document::new(build, "test".into()));
+        // Stone: 6 faces (its east face is not hidden by the half-height slab).
+        // Slab: 5 faces (its west face lies against the full stone).
+        assert_eq!(scene.mesh.vertices.len(), (6 + 5) * 4);
+        let highest = scene
+            .mesh
+            .vertices
+            .iter()
+            .filter(|v| v.position[0] == 2.0)
+            .map(|v| v.position[1]);
+        assert_eq!(highest.fold(0.0, f32::max), 0.5);
     }
 
     #[test]

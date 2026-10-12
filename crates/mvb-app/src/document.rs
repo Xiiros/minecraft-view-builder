@@ -7,6 +7,7 @@ use mvb_core::formats::{FileFormat, ReadError};
 use mvb_core::{Build, Palette, Pos};
 
 use crate::colors::{FaceColors, block_colors};
+use crate::shapes::{Facing, Shape};
 
 #[derive(Debug)]
 pub enum OpenError {
@@ -25,6 +26,10 @@ pub struct Document {
     pub size: [u32; 3],
     /// Colours of each palette entry, `None` for blocks that are not drawn.
     pub colors: Vec<Option<FaceColors>>,
+    /// Shape of each palette entry.
+    pub shapes: Vec<Shape>,
+    /// Direction of each palette entry that has one (`facing` property).
+    pub facings: Vec<Option<Facing>>,
     pub region_visible: Vec<bool>,
     /// Layers shown in the 3D view, from the bottom.
     pub layer_visible: Vec<bool>,
@@ -64,6 +69,8 @@ impl Document {
             None => (Pos::default(), [0; 3]),
         };
         let colors: Vec<_> = build.palette.states().iter().map(block_colors).collect();
+        let shapes = build.palette.states().iter().map(Shape::of).collect();
+        let facings = build.palette.states().iter().map(Facing::of).collect();
         let block_count = build
             .regions
             .iter()
@@ -83,6 +90,8 @@ impl Document {
             min,
             size,
             colors,
+            shapes,
+            facings,
             block_count,
         }
     }

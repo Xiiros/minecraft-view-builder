@@ -12,11 +12,16 @@ use eframe::egui::{
 
 use crate::document::Document;
 use crate::i18n::Texts;
+use crate::shapes::Facing;
 
 const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 96.0;
 /// Below this many points per block, grid lines would hide the blocks.
 const GRID_MIN_ZOOM: f32 = 6.0;
+/// Below this many points per block, direction markers would be unreadable.
+const MARKER_MIN_ZOOM: f32 = 14.0;
+/// Pixel budget of a layer texture (64 MiB).
+const MAX_LAYER_PIXELS: usize = 1 << 24;
 /// Opacity of the layer below, drawn where the current layer is empty.
 const BELOW_OPACITY: f32 = 0.25;
 /// Minimum distance between two coordinate labels, in points.
@@ -60,6 +65,8 @@ struct CacheKey {
 struct LayerCache {
     key: CacheKey,
     cells: Vec<u16>,
+    /// Direction marker of each palette entry that needs one.
+    markers: Vec<Option<Facing>>,
     texture: TextureHandle,
 }
 
@@ -164,7 +171,7 @@ impl View2d {
             vec2(rot_w as f32, rot_d as f32) * self.zoom,
         );
         map_painter.rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
-        let texture = self.update_cache(ui.ctx(), doc).texture.id();
+        let texture = self.update_cache(ui.ctx(), doc, max_side).texture.id();
         let mut mesh = Mesh::with_texture(texture);
         for (corner, screen) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
             .into_iter()
@@ -196,6 +203,9 @@ impl View2d {
             StrokeKind::Outside,
         );
         self.draw_rulers(&painter, canvas, map, rect, [width, depth], ui.visuals());
+        if self.zoom >= MARKER_MIN_ZOOM {
+            self.draw_markers(&map_painter, map, rect, doc);
+        }
         self.draw_compass(&map_painter, map, stroke_color);
 
         let pointer = response
@@ -230,7 +240,12 @@ impl View2d {
     }
 
     /// Rebuilds the layer texture when the layer, the regions shown or the options changed.
-    fn update_cache(&mut self, ctx: &egui::Context, doc: &Document) -> &LayerCache {
+    fn update_cache(
+        &mut self,
+        ctx: &egui::Context,
+        doc: &Document,
+        max_side: usize,
+    ) -> &LayerCache {
         let key = CacheKey {
             layer: self.layer,
             show_below: self.show_below,
@@ -240,34 +255,95 @@ impl View2d {
             return self.cache.as_ref().expect("checked above");
         }
 
+        let [width, _, depth] = doc.size.map(|s| s as usize);
+        let res = texture_resolution(width, depth, max_side);
+        let heights: Vec<Vec<u8>> = doc.shapes.iter().map(|s| s.top_heights(res)).collect();
+        // Seen from above, the top of a block's shape at one sub-pixel, shaded by its height.
+        let surface = |block: u16, sub: usize| {
+            let color = doc.color(block)?;
+            let height = *heights.get(usize::from(block))?.get(sub)?;
+            (height > 0).then(|| shade_by_height(color, height))
+        };
+        let markers = doc
+            .facings
+            .iter()
+            .zip(&heights)
+            .map(|(facing, heights)| facing.filter(|_| heights.iter().all(|&h| h == 16)))
+            .collect();
+
         let cells = doc.layer_cells(self.layer);
         let below = (self.show_below && self.layer > 0).then(|| doc.layer_cells(self.layer - 1));
-        let pixels = cells
-            .iter()
-            .enumerate()
-            .map(|(i, &block)| {
-                doc.color(block)
-                    .or_else(|| {
-                        let below = below.as_ref()?[i];
-                        Some(doc.color(below)?.gamma_multiply(BELOW_OPACITY))
-                    })
-                    .unwrap_or(Color32::TRANSPARENT)
-            })
-            .collect();
-        let image = ColorImage::new([doc.size[0] as usize, doc.size[2] as usize], pixels);
-
+        let texture_width = width * res;
+        let mut pixels = vec![Color32::TRANSPARENT; texture_width * depth * res];
+        for (i, &block) in cells.iter().enumerate() {
+            let (x, z) = (i % width, i / width);
+            let below = below.as_ref().map(|below| below[i]);
+            for sub in 0..res * res {
+                let (sx, sz) = (sub % res, sub / res);
+                pixels[(z * res + sz) * texture_width + x * res + sx] = surface(block, sub)
+                    .or_else(|| Some(surface(below?, sub)?.gamma_multiply(BELOW_OPACITY)))
+                    .unwrap_or(Color32::TRANSPARENT);
+            }
+        }
+        let image = ColorImage::new([texture_width, depth * res], pixels);
+        // Sharp pixels when zoomed in, smoothed when a block is smaller than its pixels.
+        let options = TextureOptions {
+            minification: egui::TextureFilter::Linear,
+            ..TextureOptions::NEAREST
+        };
         let texture = match self.cache.take() {
             Some(mut cache) => {
-                cache.texture.set(image, TextureOptions::NEAREST);
+                cache.texture.set(image, options);
                 cache.texture
             }
-            None => ctx.load_texture("layer", image, TextureOptions::NEAREST),
+            None => ctx.load_texture("layer", image, options),
         };
         self.cache.insert(LayerCache {
             key,
             cells,
+            markers,
             texture,
         })
+    }
+
+    /// Arrow (or dot / cross for up / down) on blocks that look like a plain square from above
+    /// but point somewhere: furnaces, observers, upside-down stairs...
+    fn draw_markers(&self, painter: &Painter, map: Rect, rect: Rect, doc: &Document) {
+        let Some(cache) = &self.cache else {
+            return;
+        };
+        let [width, _, depth] = doc.size;
+        let (rot_w, rot_d) = rotated_dims(width, depth, self.rotation);
+        let columns = visible_range(rect.min.x, map.min.x, map.max.x, self.zoom, rot_w);
+        let rows = visible_range(rect.min.y, map.min.y, map.max.y, self.zoom, rot_d);
+        for v in rows.filter(|&v| v < rot_d) {
+            for u in columns.clone().filter(|&u| u < rot_w) {
+                let (x, z) = from_rotated(u, v, width, depth, self.rotation);
+                let block = cache.cells[(z * width + x) as usize];
+                let Some(facing) = cache.markers.get(usize::from(block)).copied().flatten() else {
+                    continue;
+                };
+                let Some(color) = doc.color(block) else {
+                    continue;
+                };
+                let centre = rect.min + (vec2(u as f32, v as f32) + Vec2::splat(0.5)) * self.zoom;
+                let stroke = Stroke::new((self.zoom / 12.0).clamp(1.5, 3.0), contrasting(color));
+                let size = self.zoom * 0.3;
+                match screen_direction(facing, self.rotation) {
+                    Some(direction) => {
+                        painter.arrow(centre - direction * size, direction * size * 2.0, stroke)
+                    }
+                    None if facing == Facing::Up => {
+                        painter.circle_filled(centre, size * 0.4, stroke.color);
+                    }
+                    None => {
+                        let d = size * 0.6;
+                        painter.line_segment([centre - vec2(d, d), centre + vec2(d, d)], stroke);
+                        painter.line_segment([centre - vec2(d, -d), centre + vec2(d, -d)], stroke);
+                    }
+                }
+            }
+        }
     }
 
     fn draw_grid(
@@ -432,6 +508,53 @@ pub fn block_tooltip(ctx: &egui::Context, pointer: Pos2, doc: &Document, hovered
         });
 }
 
+/// Pixels per block of the layer texture: up to 16, enough to draw shapes, within the GPU
+/// texture size limit and the pixel budget.
+fn texture_resolution(width: usize, depth: usize, max_side: usize) -> usize {
+    [16, 8, 4, 2]
+        .into_iter()
+        .find(|&res| {
+            let (w, d) = (width * res, depth * res);
+            w <= max_side && d <= max_side && w * d <= MAX_LAYER_PIXELS
+        })
+        .unwrap_or(1)
+}
+
+/// Darker for lower surfaces, so slabs, stairs and carpets stand out from full blocks.
+fn shade_by_height(color: Color32, height: u8) -> Color32 {
+    let factor = 0.55 + 0.45 * f32::from(height) / 16.0;
+    let scale = |c: u8| (f32::from(c) * factor).round() as u8;
+    Color32::from_rgb(scale(color.r()), scale(color.g()), scale(color.b()))
+}
+
+/// Black or white, whichever reads better on `color`.
+fn contrasting(color: Color32) -> Color32 {
+    let luminance =
+        0.299 * f32::from(color.r()) + 0.587 * f32::from(color.g()) + 0.114 * f32::from(color.b());
+    if luminance > 140.0 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// Screen direction of a horizontal facing in the rotated view, `None` for up and down.
+fn screen_direction(facing: Facing, rotation: u8) -> Option<Vec2> {
+    let (dx, dz) = match facing {
+        Facing::North => (0.0, -1.0),
+        Facing::South => (0.0, 1.0),
+        Facing::East => (1.0, 0.0),
+        Facing::West => (-1.0, 0.0),
+        Facing::Up | Facing::Down => return None,
+    };
+    Some(match rotation {
+        0 => vec2(dx, dz),
+        1 => vec2(-dz, dx),
+        2 => vec2(-dx, -dz),
+        _ => vec2(dz, -dx),
+    })
+}
+
 /// Indices of the cell boundaries (0..=len) that are inside the canvas along one axis.
 fn visible_range(
     start: f32,
@@ -592,6 +715,19 @@ mod tests {
         for i in 0..7 {
             region.set(i, 1, i % 4, stone);
         }
+        // Blocks with direction markers (arrow, dot, cross) and a partial shape.
+        for (x, state) in [
+            "furnace[facing=east]",
+            "observer[facing=up]",
+            "piston[facing=down]",
+            "oak_stairs[facing=south]",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let block = build.palette.get_or_insert(state.parse().unwrap()).unwrap();
+            region.set(x as u32, 1, 3, block);
+        }
         build.regions.push(region);
         let doc = Document::new(build, "test".into());
         let texts = crate::i18n::Language::English.texts();
@@ -623,6 +759,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn screen_directions_follow_the_rotation() {
+        // Moving one block towards the facing moves the screen cell in the arrow's direction.
+        let (width, depth) = (5, 5);
+        for rotation in 0..4 {
+            for (facing, (dx, dz)) in [
+                (Facing::North, (0, -1)),
+                (Facing::East, (1, 0)),
+                (Facing::South, (0, 1)),
+                (Facing::West, (-1, 0)),
+            ] {
+                let (u0, v0) = to_rotated(2, 2, width, depth, rotation);
+                let (u1, v1) = to_rotated((2 + dx) as u32, (2 + dz) as u32, width, depth, rotation);
+                let expected = vec2(u1 as f32 - u0 as f32, v1 as f32 - v0 as f32);
+                assert_eq!(
+                    screen_direction(facing, rotation),
+                    Some(expected),
+                    "rotation {rotation}"
+                );
+            }
+        }
+        assert_eq!(screen_direction(Facing::Up, 0), None);
+    }
+
+    #[test]
+    fn texture_resolution_fits_the_limits() {
+        assert_eq!(texture_resolution(20, 30, 8192), 16);
+        assert_eq!(texture_resolution(600, 100, 8192), 8);
+        assert_eq!(texture_resolution(5000, 5000, 8192), 1);
+        assert_eq!(texture_resolution(300, 300, 2048), 4);
+    }
+
+    #[test]
+    fn lower_surfaces_are_darker() {
+        let color = Color32::from_rgb(200, 100, 50);
+        assert_eq!(shade_by_height(color, 16), color);
+        assert!(shade_by_height(color, 8).r() < color.r());
     }
 
     #[test]
