@@ -20,3 +20,37 @@ sys-locale.workspace = true
 
 [lints]
 workspace = true
+
+# Linux packages, built by .github/workflows/release.yml (cargo deb / cargo generate-rpm).
+[package.metadata.deb]
+name = "mvb"
+maintainer = "Alexis Meyer"
+copyright = "2026, Alexis Meyer"
+license-file = ["../../LICENSE", "0"]
+extended-description = "Viewer for block builds (Litematica, WorldEdit and structure files): layer by layer in 2D, free orbit in 3D, materials list, export."
+section = "graphics"
+priority = "optional"
+# Graphics and keyboard libraries are loaded at run time, so they are not detected automatically.
+depends = "$auto, libxkbcommon0, libvulkan1 | libgl1"
+recommends = "xdg-desktop-portal"
+assets = [
+    ["target/release/mvb", "usr/bin/", "755"],
+    ["../../packaging/linux/mvb.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/icons/mvb.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "mvb"
+summary = "Viewer for block builds, layer by layer"
+license = "MIT"
+auto-req = "no"
+assets = [
+    { source = "target/release/mvb", dest = "/usr/bin/mvb", mode = "755" },
+    { source = "../../packaging/linux/mvb.desktop", dest = "/usr/share/applications/mvb.desktop", mode = "644" },
+    { source = "../../packaging/icons/mvb.png", dest = "/usr/share/icons/hicolor/512x512/apps/mvb.png", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+glibc = ">= 2.28"
+libxkbcommon = "*"
+vulkan-loader = "*"
