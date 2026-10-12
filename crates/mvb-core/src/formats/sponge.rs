@@ -22,6 +22,7 @@
 
 use crate::block::{BlockState, Palette};
 use crate::build::{BlockEntity, Build, Entity, Pos, Region, Size, checked_volume};
+use crate::formats::export::{ExportError, gzip, int, merged_region};
 use crate::formats::{ImportError, decompress, double_triple, take};
 use crate::nbt::{self, Compound, Tag};
 
@@ -67,6 +68,9 @@ pub fn read(bytes: &[u8]) -> Result<Build, ImportError> {
         }
         if let Some(author) = metadata.remove("Author").and_then(Tag::into_string) {
             build.metadata.author = author;
+        }
+        if let Some(description) = metadata.remove("Description").and_then(Tag::into_string) {
+            build.metadata.description = description;
         }
         if !metadata.is_empty() {
             root.insert("Metadata", metadata);
@@ -124,6 +128,135 @@ pub fn read(bytes: &[u8]) -> Result<Build, ImportError> {
     build.extra.insert(EXTRA_KEY, root);
     build.regions.push(region);
     Ok(build)
+}
+
+/// Writes a gzip-compressed schematic: version 2 (read by every WorldEdit 7 and
+/// FastAsyncWorldEdit), or version 3 when the build was read from a version 3 file. Regions are
+/// merged. Offset, metadata and biomes read from a schematic are written back.
+pub fn write(build: &Build) -> Result<Vec<u8>, ExportError> {
+    let mut extra = build
+        .extra
+        .get(EXTRA_KEY)
+        .and_then(Tag::as_compound)
+        .cloned()
+        .unwrap_or_default();
+    let version = match extra.remove("Version").and_then(|t| t.as_int()) {
+        Some(3) => 3,
+        _ => 2,
+    };
+    let region = merged_region(build)?;
+    let size = region.size();
+    let dimension = |value: u32| {
+        u16::try_from(value)
+            .map(|v| Tag::Short(v as i16))
+            .map_err(|_| ExportError::TooLarge("a schematic is at most 65535 blocks wide"))
+    };
+
+    // Only the states used, in order of first use, as varint indices.
+    let mut palette = Compound::new();
+    let mut file_index: Vec<Option<u32>> = vec![None; build.palette.len()];
+    let mut data = Vec::with_capacity(region.blocks().len());
+    for &block in region.blocks() {
+        let index = *file_index[usize::from(block)].get_or_insert_with(|| {
+            let state = build
+                .palette
+                .get(block)
+                .cloned()
+                .unwrap_or_else(BlockState::air);
+            let index = palette.len() as u32;
+            palette.insert(state.to_string(), index as i32);
+            index
+        });
+        write_varint(&mut data, index);
+    }
+
+    let nested = version == 3;
+    let block_entities: Vec<Tag> = region
+        .block_entities
+        .iter()
+        .map(|be| {
+            let pos = Tag::IntArray(vec![be.pos.x, be.pos.y, be.pos.z]);
+            Tag::Compound(with_position(pos, &be.id, &be.data, nested))
+        })
+        .collect();
+    let entities: Vec<Tag> = region
+        .entities
+        .iter()
+        .map(|e| {
+            let pos = Tag::List(e.pos.map(Tag::Double).to_vec());
+            Tag::Compound(with_position(pos, &e.id, &e.data, nested))
+        })
+        .collect();
+
+    let mut metadata = extra
+        .remove("Metadata")
+        .and_then(Tag::into_compound)
+        .unwrap_or_default();
+    for (key, value) in [
+        ("Name", &build.metadata.name),
+        ("Author", &build.metadata.author),
+        ("Description", &build.metadata.description),
+    ] {
+        if !value.is_empty() {
+            metadata.insert(key, value.as_str());
+        }
+    }
+    let offset = extra
+        .remove("Offset")
+        .unwrap_or_else(|| Tag::IntArray(vec![0; 3]));
+
+    // Format-specific data read from a schematic comes first, the build's own data overrides it.
+    let mut schematic = extra;
+    schematic.insert("Version", version);
+    schematic.insert("DataVersion", build.data_version);
+    schematic.insert("Width", dimension(size.x)?);
+    schematic.insert("Height", dimension(size.y)?);
+    schematic.insert("Length", dimension(size.z)?);
+    schematic.insert("Offset", offset);
+    schematic.insert("Metadata", metadata);
+    if nested {
+        let mut blocks = schematic
+            .remove("Blocks")
+            .and_then(Tag::into_compound)
+            .unwrap_or_default();
+        blocks.insert("Palette", palette);
+        blocks.insert("Data", data);
+        blocks.insert("BlockEntities", block_entities);
+        schematic.insert("Blocks", blocks);
+        schematic.insert("Entities", entities);
+        let mut root = Compound::new();
+        root.insert("Schematic", schematic);
+        gzip(&nbt::write("", &root)?)
+    } else {
+        schematic.insert("PaletteMax", int(palette.len() as u32));
+        schematic.insert("Palette", palette);
+        schematic.insert("BlockData", data);
+        schematic.insert("BlockEntities", block_entities);
+        schematic.insert("Entities", entities);
+        gzip(&nbt::write("Schematic", &schematic)?)
+    }
+}
+
+/// `{ Pos, Id, <data> }` (version 2) or `{ Pos, Id, Data: <data> }` (version 3).
+fn with_position(pos: Tag, id: &str, data: &Compound, nested: bool) -> Compound {
+    let mut entry = if nested {
+        let mut entry = Compound::new();
+        entry.insert("Data", data.clone());
+        entry
+    } else {
+        data.clone()
+    };
+    entry.insert("Pos", pos);
+    entry.insert("Id", id);
+    entry
+}
+
+fn write_varint(out: &mut Vec<u8>, mut value: u32) {
+    while value >= 0x80 {
+        out.push((value as u8 & 0x7F) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
 }
 
 /// Reads a dimension stored as a short that is meant as unsigned (up to 65535).
@@ -536,6 +669,48 @@ mod tests {
             read(&encode(&huge_index)),
             Err(ImportError::Field("Palette"))
         ));
+    }
+
+    #[test]
+    fn writer_varints_match_the_reader() {
+        let mut data = Vec::new();
+        for value in [0, 127, 128, 300, 70_000] {
+            write_varint(&mut data, value);
+        }
+        assert_eq!(data, varints(&[0, 127, 128, 300, 70_000]));
+    }
+
+    #[test]
+    fn written_files_read_back_the_same() {
+        for (root, version) in [(v2(), 2), (v3(), 3)] {
+            let original = read(&encode(&root)).unwrap();
+            let reread = read(&write(&original).unwrap()).unwrap();
+            assert!(reread.same_content(&original), "version {version}");
+            assert_eq!(reread.metadata, original.metadata);
+            let extra = reread
+                .extra
+                .get(EXTRA_KEY)
+                .and_then(Tag::as_compound)
+                .unwrap();
+            assert_eq!(extra.get("Version"), Some(&Tag::Int(version)));
+            assert_eq!(extra.get("Offset"), Some(&Tag::IntArray(vec![10, 64, -5])));
+        }
+    }
+
+    #[test]
+    fn builds_from_other_formats_are_written_as_version_2() {
+        let mut build = read(&encode(&v3())).unwrap();
+        build.extra = Compound::new();
+        build.metadata.description = "Une tour".into();
+        let reread = read(&write(&build).unwrap()).unwrap();
+        assert!(reread.same_content(&build));
+        assert_eq!(reread.metadata.description, "Une tour");
+        let extra = reread
+            .extra
+            .get(EXTRA_KEY)
+            .and_then(Tag::as_compound)
+            .unwrap();
+        assert_eq!(extra.get("Version"), Some(&Tag::Int(2)));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! In-memory representation of a build: regions of blocks sharing one palette, plus entities.
 
+use std::collections::BTreeMap;
+
 use crate::block::Palette;
 use crate::nbt::Compound;
 
@@ -235,6 +237,60 @@ impl Build {
                     ),
                 )
             })
+    }
+
+    /// True when both builds hold the same blocks, block entities and entities at the same
+    /// positions relative to their bounding box, whatever the region split, palette order or
+    /// format-specific data. Used to check that a file written then read back is the same build.
+    pub fn same_content(&self, other: &Build) -> bool {
+        self.content() == other.content()
+    }
+
+    /// Non-air blocks by position (merged like single-box exports do: a drawn block wins, then the
+    /// later region), and sorted descriptions of block entities and entities.
+    fn content(&self) -> (BTreeMap<[i64; 3], String>, Vec<String>, Vec<String>) {
+        let min = self.bounds().map_or(Pos::default(), |(min, _)| min);
+        let relative = |origin: Pos, [x, y, z]: [i64; 3]| {
+            [
+                i64::from(origin.x) - i64::from(min.x) + x,
+                i64::from(origin.y) - i64::from(min.y) + y,
+                i64::from(origin.z) - i64::from(min.z) + z,
+            ]
+        };
+        let (mut blocks, mut block_entities, mut entities) =
+            (BTreeMap::new(), Vec::new(), Vec::new());
+        for region in &self.regions {
+            let size = region.size;
+            for y in 0..size.y {
+                for z in 0..size.z {
+                    for x in 0..size.x {
+                        let block = region.get(x, y, z).unwrap_or(Palette::AIR);
+                        let Some(state) = self.palette.get(block).filter(|_| block != Palette::AIR)
+                        else {
+                            continue;
+                        };
+                        let pos = relative(region.origin, [x, y, z].map(i64::from));
+                        if state.is_visible() {
+                            blocks.insert(pos, state.to_string());
+                        } else {
+                            blocks.entry(pos).or_insert_with(|| state.to_string());
+                        }
+                    }
+                }
+            }
+            for be in &region.block_entities {
+                let pos = relative(region.origin, [be.pos.x, be.pos.y, be.pos.z].map(i64::from));
+                block_entities.push(format!("{pos:?} {} {:?}", be.id, be.data));
+            }
+            for e in &region.entities {
+                let shift = relative(region.origin, [0; 3]);
+                let pos: Vec<f64> = e.pos.iter().zip(shift).map(|(p, s)| p + s as f64).collect();
+                entities.push(format!("{pos:?} {} {:?}", e.id, e.data));
+            }
+        }
+        block_entities.sort();
+        entities.sort();
+        (blocks, block_entities, entities)
     }
 
     /// Checks that every block refers to an existing palette entry.

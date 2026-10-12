@@ -16,7 +16,7 @@ mod view3d;
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
-use mvb_core::formats::FileFormat;
+use mvb_core::formats::{self, FileFormat, Loss, Tool};
 
 use document::{Document, OpenError};
 use i18n::{Language, Texts};
@@ -58,6 +58,50 @@ fn main() -> eframe::Result {
     )
 }
 
+/// How long the "saved" confirmation stays in the status bar.
+const NOTICE_SECONDS: f64 = 6.0;
+
+fn format_label(texts: &Texts, format: FileFormat) -> &'static str {
+    match format {
+        FileFormat::Project => texts.format_project,
+        FileFormat::Litematica => texts.format_litematica,
+        FileFormat::Sponge => texts.format_sponge,
+        FileFormat::Structure => texts.format_structure,
+    }
+}
+
+fn loss_text(texts: &Texts, loss: &Loss) -> String {
+    match loss {
+        Loss::RegionsMerged(count) => texts.loss_regions.replace("{n}", &count.to_string()),
+        Loss::FormatData(Tool::Litematica) => texts.loss_litematica_data.to_owned(),
+        Loss::FormatData(Tool::WorldEdit) => texts.loss_worldedit_data.to_owned(),
+        Loss::Metadata => texts.loss_metadata.to_owned(),
+        Loss::StructureBlockLimit => texts
+            .loss_structure_limit
+            .replace("{n}", &formats::STRUCTURE_BLOCK_LIMIT.to_string()),
+    }
+}
+
+/// A build title usable as a file name on every system.
+fn file_name(title: &str) -> String {
+    let name: String = title
+        .chars()
+        .map(|c| {
+            if c.is_control() || r#"<>:"/\|?*"#.contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let name = name.trim().trim_end_matches('.');
+    if name.is_empty() {
+        "build".to_owned()
+    } else {
+        name.to_owned()
+    }
+}
+
 fn window_title(document: Option<&str>) -> String {
     let base = format!("{APP_NAME} {}", mvb_core::VERSION);
     match document {
@@ -84,6 +128,11 @@ struct App {
     /// Block under the pointer during the previous frame, shown in the status bar.
     hovered: Option<Hovered>,
     error: Option<(PathBuf, OpenError)>,
+    /// Export waiting for the user to accept what it loses.
+    pending_export: Option<(FileFormat, Vec<Loss>)>,
+    save_error: Option<(PathBuf, String)>,
+    /// Confirmation shown in the status bar, with the time it was set.
+    notice: Option<(String, f64)>,
 }
 
 impl App {
@@ -98,6 +147,9 @@ impl App {
             gpu_3d: false,
             hovered: None,
             error: None,
+            pending_export: None,
+            save_error: None,
+            notice: None,
         }
     }
 
@@ -134,6 +186,27 @@ impl App {
                 if ui.button(texts.menu_open).clicked() {
                     self.open_dialog(ui.ctx());
                 }
+                let has_document = self.document.is_some();
+                if ui
+                    .add_enabled(has_document, egui::Button::new(texts.menu_save_project))
+                    .clicked()
+                {
+                    self.start_export(ui.ctx(), FileFormat::Project);
+                }
+                ui.add_enabled_ui(has_document, |ui| {
+                    ui.menu_button(texts.menu_export, |ui| {
+                        for format in [
+                            FileFormat::Litematica,
+                            FileFormat::Sponge,
+                            FileFormat::Structure,
+                        ] {
+                            if ui.button(format_label(texts, format)).clicked() {
+                                self.start_export(ui.ctx(), format);
+                            }
+                        }
+                    });
+                });
+                ui.separator();
                 if ui.button(texts.menu_quit).clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -281,7 +354,109 @@ impl App {
             });
     }
 
+    /// Exports right away when nothing is lost, otherwise asks first.
+    fn start_export(&mut self, ctx: &egui::Context, format: FileFormat) {
+        let Some(document) = &self.document else {
+            return;
+        };
+        let losses = formats::losses(&document.build, format);
+        if losses.is_empty() {
+            self.save_dialog(ctx, format);
+        } else {
+            self.pending_export = Some((format, losses));
+        }
+    }
+
+    fn save_dialog(&mut self, ctx: &egui::Context, format: FileFormat) {
+        let Some(document) = &self.document else {
+            return;
+        };
+        let texts = self.language.texts();
+        let extension = format.extension();
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(format_label(texts, format), &[extension])
+            .set_file_name(format!("{}.{extension}", file_name(&document.title)))
+            .save_file()
+        else {
+            return;
+        };
+        let result = format
+            .write(&document.build)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()));
+        match result {
+            Ok(()) => {
+                let time = ctx.input(|i| i.time);
+                self.notice = Some((format!("{} {}", texts.saved, path.display()), time));
+            }
+            Err(error) => self.save_error = Some((path, error)),
+        }
+    }
+
+    /// Lists what the export loses, with Cancel / Export anyway.
+    fn export_warning(&mut self, ctx: &egui::Context, texts: &Texts) {
+        let Some((format, losses)) = &self.pending_export else {
+            return;
+        };
+        let format = *format;
+        let mut choice = None;
+        let modal = egui::Modal::new(egui::Id::new("export_warning")).show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            ui.heading(texts.export_warning_title);
+            ui.label(format_label(texts, format));
+            ui.add_space(6.0);
+            for loss in losses {
+                ui.label(format!("• {}", loss_text(texts, loss)));
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button(texts.cancel).clicked() {
+                    choice = Some(false);
+                }
+                if ui.button(texts.export_anyway).clicked() {
+                    choice = Some(true);
+                }
+            });
+        });
+        if modal.should_close() {
+            choice.get_or_insert(false);
+        }
+        if let Some(accepted) = choice {
+            self.pending_export = None;
+            if accepted {
+                self.save_dialog(ctx, format);
+            }
+        }
+    }
+
+    fn save_error_modal(&mut self, ctx: &egui::Context, texts: &Texts) {
+        let Some((path, error)) = &self.save_error else {
+            return;
+        };
+        let modal = egui::Modal::new(egui::Id::new("save_error")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.heading(texts.error_save_title);
+            ui.label(path.display().to_string());
+            ui.add_space(6.0);
+            ui.label(error);
+            ui.add_space(6.0);
+            ui.button(texts.ok).clicked()
+        });
+        if modal.inner || modal.should_close() {
+            self.save_error = None;
+        }
+    }
+
     fn status_bar(&self, ui: &mut egui::Ui, texts: &Texts) {
+        if let Some((notice, since)) = &self.notice {
+            let elapsed = ui.input(|i| i.time) - since;
+            if elapsed < NOTICE_SECONDS {
+                ui.label(notice);
+                ui.ctx()
+                    .request_repaint_after_secs((NOTICE_SECONDS - elapsed) as f32);
+                return;
+            }
+        }
         let hovered = self.hovered.and_then(|h| {
             let state = self.document.as_ref()?.build.palette.get(h.block)?;
             Some((h, state))
@@ -393,5 +568,43 @@ impl eframe::App for App {
         }
 
         self.error_modal(ui.ctx(), texts);
+        self.export_warning(ui.ctx(), texts);
+        self.save_error_modal(ui.ctx(), texts);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_names_are_sanitised() {
+        assert_eq!(file_name("Complet_AutoBrewer*12"), "Complet_AutoBrewer_12");
+        assert_eq!(file_name("a/b:c?"), "a_b_c_");
+        assert_eq!(file_name("Tour du château"), "Tour du château");
+        assert_eq!(file_name(" .. "), "build");
+    }
+
+    #[test]
+    fn loss_texts_fill_their_placeholders() {
+        for language in Language::ALL {
+            let texts = language.texts();
+            let losses = [
+                Loss::RegionsMerged(3),
+                Loss::FormatData(Tool::Litematica),
+                Loss::FormatData(Tool::WorldEdit),
+                Loss::Metadata,
+                Loss::StructureBlockLimit,
+            ];
+            for loss in &losses {
+                let text = loss_text(texts, loss);
+                assert!(!text.contains('{'), "{text}");
+            }
+        }
+        let french = Language::French.texts();
+        assert_eq!(
+            loss_text(french, &Loss::RegionsMerged(3)),
+            "Les 3 régions seront fusionnées en une seule."
+        );
     }
 }

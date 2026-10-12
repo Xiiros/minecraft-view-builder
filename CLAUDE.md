@@ -15,8 +15,9 @@ Performance first: execution speed, low RAM, small disk footprint. Prefer small,
   - `mvb`: native project format (magic + version + zstd NBT); the layout is documented at the top of the file.
   - `materials`: blocks counted as placed items (`item_for`: double slab = 2, upper door half / bed head skipped, wall torch = torch, candles/pickles/snow layers counted), `stack_size`, `MaterialIndex` (per-palette lookup, `count`).
   - `formats`: other tools' formats (`structure` = vanilla `.nbt`, `sponge` = WorldEdit `.schem` v1-v3, `litematica` = `.litematic`, multi-region), shared gzip/`ImportError` helpers.
+  - Export: `FileFormat::write` + `formats::losses` (what a format cannot keep: merged regions, other tools' data, name/description in .nbt, structure-block size limit) shown to the user before writing. `formats/export.rs` has `merged_region` (single-box formats). Sponge writes v2 unless the source was v3; Litematica writes back the source version, signed region geometry, ticks and timestamps. `Build::same_content` compares builds whatever the region split / palette order (used by round-trip tests and `inspect`).
   - File readers must treat input as untrusted: check lengths before allocating, return errors, never panic.
-  - `examples/inspect.rs`: loads files, prints a summary and checks the `.mvb` round trip (`cargo run --release -p mvb-core --example inspect -- <files>`). Real test data: the game jar (`%APPDATA%\.minecraft\versions\<v>\<v>.jar`) contains ~1200 vanilla structures under `data/minecraft/structure/`.
+  - `examples/inspect.rs`: loads files, prints a summary and checks the round trip through `.mvb` and every export format (`cargo run --release -p mvb-core --example inspect -- <files>`). Real test data: the game jar (`%APPDATA%\.minecraft\versions\<v>\<v>.jar`) contains ~1200 vanilla structures under `data/minecraft/structure/`.
 - `crates/mvb-app`: egui + wgpu desktop app (binary `mvb`, accepts a file path argument).
   - `i18n`: UI strings, one `Texts` constant per language (English, French).
   - `document`: an opened build + derived display data (bounding box, palette colours, visible regions, `layer_cells`).

@@ -104,6 +104,25 @@ pub struct Texts {
     pub column_count: &'static str,
     pub column_stacks: &'static str,
     pub no_materials: &'static str,
+
+    pub menu_save_project: &'static str,
+    pub menu_export: &'static str,
+    pub format_project: &'static str,
+    pub format_litematica: &'static str,
+    pub format_sponge: &'static str,
+    pub format_structure: &'static str,
+    pub export_warning_title: &'static str,
+    pub export_anyway: &'static str,
+    pub cancel: &'static str,
+    /// `{n}`: number of regions.
+    pub loss_regions: &'static str,
+    pub loss_litematica_data: &'static str,
+    pub loss_worldedit_data: &'static str,
+    pub loss_metadata: &'static str,
+    /// `{n}`: largest size a structure block can load.
+    pub loss_structure_limit: &'static str,
+    pub saved: &'static str,
+    pub error_save_title: &'static str,
 }
 
 const EN: Texts = Texts {
@@ -165,6 +184,23 @@ const EN: Texts = Texts {
     column_count: "Count",
     column_stacks: "Stacks",
     no_materials: "Nothing to place here.",
+
+    menu_save_project: "Save project…",
+    menu_export: "Export as",
+    format_project: "Project (.mvb)",
+    format_litematica: "Litematica (.litematic)",
+    format_sponge: "WorldEdit (.schem)",
+    format_structure: "Structure block (.nbt)",
+    export_warning_title: "Some information will not be kept",
+    export_anyway: "Export anyway",
+    cancel: "Cancel",
+    loss_regions: "The {n} regions will be merged into one.",
+    loss_litematica_data: "Data specific to Litematica will not be kept (preview image, dates, scheduled ticks).",
+    loss_worldedit_data: "Data specific to WorldEdit will not be kept (paste offset, biomes, WorldEdit metadata).",
+    loss_metadata: "This format stores neither the name nor the description.",
+    loss_structure_limit: "Larger than {n} blocks: a structure block cannot load it in one piece (the /place command can).",
+    saved: "Saved:",
+    error_save_title: "Cannot save the file",
 };
 
 const FR: Texts = Texts {
@@ -226,6 +262,23 @@ const FR: Texts = Texts {
     column_count: "Quantité",
     column_stacks: "Piles",
     no_materials: "Rien à poser ici.",
+
+    menu_save_project: "Enregistrer le projet…",
+    menu_export: "Exporter en",
+    format_project: "Projet (.mvb)",
+    format_litematica: "Litematica (.litematic)",
+    format_sponge: "WorldEdit (.schem)",
+    format_structure: "Bloc de structure (.nbt)",
+    export_warning_title: "Certaines informations ne seront pas conservées",
+    export_anyway: "Exporter quand même",
+    cancel: "Annuler",
+    loss_regions: "Les {n} régions seront fusionnées en une seule.",
+    loss_litematica_data: "Les données propres à Litematica ne seront pas conservées (aperçu, dates, ticks programmés).",
+    loss_worldedit_data: "Les données propres à WorldEdit ne seront pas conservées (décalage de collage, biomes, métadonnées WorldEdit).",
+    loss_metadata: "Ce format n'enregistre ni le nom ni la description.",
+    loss_structure_limit: "Plus de {n} blocs de côté : un bloc de structure ne peut pas la charger d'un seul coup (la commande /place le peut).",
+    saved: "Enregistré :",
+    error_save_title: "Impossible d'enregistrer le fichier",
 };
 
 #[cfg(test)]
