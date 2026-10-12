@@ -6,6 +6,7 @@ mod camera;
 mod colors;
 mod document;
 mod i18n;
+mod materials;
 mod render3d;
 mod scene;
 mod shapes;
@@ -19,6 +20,7 @@ use mvb_core::formats::FileFormat;
 
 use document::{Document, OpenError};
 use i18n::{Language, Texts};
+use materials::MaterialsPanel;
 use render3d::Renderer3d;
 use view2d::{Hovered, View2d, ZOOM_STEP};
 use view3d::View3d;
@@ -76,6 +78,7 @@ struct App {
     mode: Mode,
     view2d: View2d,
     view3d: View3d,
+    materials: MaterialsPanel,
     /// False when the 3D renderer could not be created.
     gpu_3d: bool,
     /// Block under the pointer during the previous frame, shown in the status bar.
@@ -91,6 +94,7 @@ impl App {
             mode: Mode::Layer2d,
             view2d: View2d::default(),
             view3d: View3d::default(),
+            materials: MaterialsPanel::default(),
             gpu_3d: false,
             hovered: None,
             error: None,
@@ -133,6 +137,9 @@ impl App {
                 if ui.button(texts.menu_quit).clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
+            });
+            ui.menu_button(texts.menu_view, |ui| {
+                ui.checkbox(&mut self.materials.open, texts.show_materials);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 egui::ComboBox::from_id_salt("language")
@@ -355,6 +362,18 @@ impl eframe::App for App {
                 .resizable(false)
                 .exact_size(240.0)
                 .show(ui, |ui| self.side_panel(ui, texts));
+        }
+        if let Some(document) = &self.document
+            && self.materials.open
+        {
+            let in_3d = self.mode == Mode::View3d;
+            let layer = self.view2d.layer.min(document.size[1].saturating_sub(1));
+            egui::Panel::right("materials_panel")
+                .resizable(true)
+                .default_size(280.0)
+                .show(ui, |ui| {
+                    self.materials.ui(ui, document, texts, in_3d, layer)
+                });
         }
         let central = egui::CentralPanel::default();
         match &self.document {

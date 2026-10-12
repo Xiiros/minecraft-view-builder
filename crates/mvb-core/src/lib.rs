@@ -5,6 +5,7 @@
 pub mod block;
 pub mod build;
 pub mod formats;
+pub mod materials;
 pub mod mvb;
 pub mod nbt;
 
