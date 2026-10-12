@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=MVB
+GenericName=Block build viewer
+GenericName[fr]=Visionneuse de constructions en blocs
+Comment=View block builds layer by layer
+Comment[fr]=Visualiser des constructions en blocs couche par couche
+Exec=mvb %f
+Icon=mvb
+Terminal=false
+Categories=Graphics;Viewer;3DGraphics;
+Keywords=schematic;litematic;schem;structure;blocks;

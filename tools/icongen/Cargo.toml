@@ -1,0 +1,15 @@
+[package]
+name = "icongen"
+description = "Development tool: draws the application icon and writes it as PNG, ICO and ICNS."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+png.workspace = true
+
+[lints]
+workspace = true

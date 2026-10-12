@@ -1,0 +1,141 @@
+name: Release
+
+# Builds the installers. On a version tag (vX.Y.Z) they are attached to a draft GitHub release,
+# to be reviewed and published by hand. On pull requests touching the packaging, and when run by
+# hand, they are only uploaded as workflow artifacts.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+            exit 1
+          fi
+
+  windows:
+    name: Windows installer
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p mvb-app
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=${{ needs.version.outputs.version }}" packaging\windows\mvb.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Portable archive
+        shell: pwsh
+        run: |
+          $dir = "dist\mvb-${{ needs.version.outputs.version }}-windows-x64-portable"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target\release\mvb.exe, LICENSE $dir
+          Compress-Archive -Path "$dir\*" -DestinationPath "$dir.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+
+  macos:
+    name: macOS disk image
+    needs: version
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Universal binary (Apple Silicon + Intel)
+        run: |
+          cargo build --release --locked -p mvb-app --target aarch64-apple-darwin
+          cargo build --release --locked -p mvb-app --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create -output dist/mvb \
+            target/aarch64-apple-darwin/release/mvb target/x86_64-apple-darwin/release/mvb
+      - run: sh packaging/macos/make-dmg.sh dist/mvb "${{ needs.version.outputs.version }}" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+
+  linux:
+    name: Linux packages
+    needs: version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild,cargo-deb,cargo-generate-rpm
+      - run: pip3 install ziglang
+      # Linked against glibc 2.28 so that the binary runs on Debian 10+ and RHEL 8+, not only on
+      # distributions as recent as the build machine.
+      - run: cargo zigbuild --release --locked -p mvb-app --target x86_64-unknown-linux-gnu.2.28
+      - run: cargo deb -p mvb-app --no-build --target x86_64-unknown-linux-gnu --output dist/
+      - run: cargo generate-rpm -p crates/mvb-app --target x86_64-unknown-linux-gnu --output dist/
+      - name: Portable archive
+        run: |
+          dir="mvb-${{ needs.version.outputs.version }}-linux-x64-portable"
+          mkdir -p "dist/$dir"
+          cp target/x86_64-unknown-linux-gnu/release/mvb LICENSE "dist/$dir/"
+          tar -czf "dist/$dir.tar.gz" -C dist "$dir"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+
+  release:
+    name: Draft release
+    if: github.ref_type == 'tag'
+    needs: [version, windows, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --draft --generate-notes --title "$GITHUB_REF_NAME"
