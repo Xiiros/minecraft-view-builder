@@ -1,5 +1,6 @@
 //! Development tool: loads build files and prints a one-line summary for each.
-//! Each file is also saved to `.mvb` and reloaded in memory to check that nothing is lost.
+//! Each file is also saved to `.mvb` and exported to every format, then read back in memory to
+//! check that nothing is lost.
 //!
 //! ```sh
 //! cargo run --release -p mvb-core --example inspect -- house.nbt tower.mvb
@@ -56,6 +57,18 @@ fn main() -> ExitCode {
             let reloaded = mvb::read(&saved).map_err(|e| format!("reload: {e}"))?;
             if reloaded != build {
                 return Err("reloaded .mvb differs from the original".into());
+            }
+            for format in FileFormat::ALL {
+                let extension = format.extension();
+                let bytes = format
+                    .write(&build)
+                    .map_err(|e| format!("export .{extension}: {e}"))?;
+                let reread = format
+                    .read(&bytes)
+                    .map_err(|e| format!("re-read .{extension}: {e}"))?;
+                if !reread.same_content(&build) {
+                    return Err(format!("exported .{extension} differs from the original"));
+                }
             }
             Ok(build)
         });

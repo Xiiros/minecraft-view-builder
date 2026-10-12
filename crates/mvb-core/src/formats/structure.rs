@@ -15,10 +15,13 @@
 //! untouched there. They are imported as `minecraft:structure_void` so that nothing is lost.
 //! An entity's `blockPos` is not kept: it can be recomputed from its position when exporting.
 
+use std::collections::HashMap;
+
 use crate::block::{BlockState, Palette};
 use crate::build::{BlockEntity, Build, Entity, Pos, Region, Size, checked_volume};
+use crate::formats::export::{ExportError, gzip, int, merged_region};
 use crate::formats::{ImportError, decompress, double_triple, int_triple, take};
-use crate::nbt::{self, Tag};
+use crate::nbt::{self, Compound, Tag};
 
 /// Reads a structure file, gzip-compressed or not.
 pub fn read(bytes: &[u8]) -> Result<Build, ImportError> {
@@ -127,6 +130,91 @@ pub fn read(bytes: &[u8]) -> Result<Build, ImportError> {
     region.entities = entities;
     build.regions.push(region);
     Ok(build)
+}
+
+/// Writes a gzip-compressed structure file. Regions are merged; structure voids are left out of
+/// `blocks`, like the game does; an entity's `blockPos` is the block containing it.
+pub fn write(build: &Build) -> Result<Vec<u8>, ExportError> {
+    let region = merged_region(build)?;
+    let size = region.size();
+    let void = build
+        .palette
+        .index_of(&BlockState::new("minecraft:structure_void"));
+    let block_entities: HashMap<Pos, &BlockEntity> = region
+        .block_entities
+        .iter()
+        .map(|be| (be.pos, be))
+        .collect();
+
+    // Only the states used, in order of first use.
+    let mut file_palette = Vec::new();
+    let mut file_index: Vec<Option<i32>> = vec![None; build.palette.len()];
+    let mut blocks = Vec::new();
+    for y in 0..size.y {
+        for z in 0..size.z {
+            for x in 0..size.x {
+                let block = region.get(x, y, z).unwrap_or(Palette::AIR);
+                if Some(block) == void {
+                    continue;
+                }
+                let state = *file_index[usize::from(block)].get_or_insert_with(|| {
+                    let state = build
+                        .palette
+                        .get(block)
+                        .cloned()
+                        .unwrap_or_else(BlockState::air);
+                    file_palette.push(Tag::Compound(state.to_nbt()));
+                    file_palette.len() as i32 - 1
+                });
+                let pos = [int(x), int(y), int(z)];
+                let mut entry = Compound::new();
+                entry.insert("state", state);
+                entry.insert("pos", ints(pos));
+                if let Some(be) = block_entities.get(&Pos::new(pos[0], pos[1], pos[2])) {
+                    let mut data = be.data.clone();
+                    if !be.id.is_empty() {
+                        data.insert("id", be.id.as_str());
+                    }
+                    entry.insert("nbt", data);
+                }
+                blocks.push(Tag::Compound(entry));
+            }
+        }
+    }
+
+    let entities: Vec<Tag> = region
+        .entities
+        .iter()
+        .map(|e| {
+            let mut data = e.data.clone();
+            data.insert("id", e.id.as_str());
+            data.insert("Pos", doubles(e.pos));
+            let mut entry = Compound::new();
+            entry.insert("pos", doubles(e.pos));
+            entry.insert("blockPos", ints(e.pos.map(|p| p.floor() as i32)));
+            entry.insert("nbt", data);
+            Tag::Compound(entry)
+        })
+        .collect();
+
+    let mut root = Compound::new();
+    root.insert("DataVersion", build.data_version);
+    root.insert("size", ints([int(size.x), int(size.y), int(size.z)]));
+    root.insert("palette", file_palette);
+    root.insert("blocks", blocks);
+    root.insert("entities", entities);
+    if !build.metadata.author.is_empty() {
+        root.insert("author", build.metadata.author.as_str());
+    }
+    gzip(&nbt::write("", &root)?)
+}
+
+fn ints(values: [i32; 3]) -> Tag {
+    Tag::List(values.map(Tag::Int).to_vec())
+}
+
+fn doubles(values: [f64; 3]) -> Tag {
+    Tag::List(values.map(Tag::Double).to_vec())
 }
 
 /// Index in a region's block array, if the position is inside `size`.
@@ -355,6 +443,28 @@ mod tests {
         let mut root = sample();
         root.insert("size", ints([i32::MAX, i32::MAX, i32::MAX]));
         assert!(matches!(read(&encode(&root)), Err(ImportError::Model(_))));
+    }
+
+    #[test]
+    fn written_files_read_back_the_same() {
+        let original = read(&encode(&sample())).unwrap();
+        let written = write(&original).unwrap();
+        let reread = read(&written).unwrap();
+        assert!(reread.same_content(&original));
+        assert_eq!(reread.data_version, original.data_version);
+        assert_eq!(reread.metadata.author, "Alexis");
+        // The structure void stays a void (left out of the file, not written as a block).
+        let void = BlockState::new("minecraft:structure_void");
+        let (_, root) = nbt::read(&decompress(&written).unwrap()).unwrap();
+        let palette = root.get("palette").and_then(Tag::as_list).unwrap();
+        assert!(!palette.contains(&Tag::Compound(void.to_nbt())));
+        // The entity's block position is the block containing it.
+        let entity = &root.get("entities").and_then(Tag::as_list).unwrap()[0];
+        let block_pos = entity
+            .as_compound()
+            .and_then(|e| e.get("blockPos"))
+            .unwrap();
+        assert_eq!(block_pos, &ints([0, 1, 0]));
     }
 
     #[test]

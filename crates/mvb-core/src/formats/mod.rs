@@ -1,6 +1,7 @@
 //! Readers and writers for the build file formats of other tools, and [`FileFormat`] to pick the
 //! right one (native projects included).
 
+mod export;
 pub mod litematica;
 pub mod sponge;
 pub mod structure;
@@ -9,6 +10,8 @@ use std::borrow::Cow;
 use std::io::Read;
 
 use flate2::read::GzDecoder;
+
+pub use export::{ExportError, Loss, STRUCTURE_BLOCK_LIMIT, Tool, losses};
 
 use crate::block::ParseBlockStateError;
 use crate::build::{Build, ModelError};
@@ -82,6 +85,17 @@ impl FileFormat {
         Self::ALL
             .into_iter()
             .find(|format| format.extension().eq_ignore_ascii_case(extension))
+    }
+
+    /// Serializes `build` to the bytes of a file of this format. Check [`losses`] first: what is
+    /// listed there is dropped.
+    pub fn write(self, build: &Build) -> Result<Vec<u8>, ExportError> {
+        match self {
+            FileFormat::Project => Ok(mvb::write(build)?),
+            FileFormat::Litematica => litematica::write(build),
+            FileFormat::Sponge => sponge::write(build),
+            FileFormat::Structure => structure::write(build),
+        }
     }
 
     /// Parses the content of a file of this format.

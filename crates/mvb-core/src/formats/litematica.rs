@@ -25,6 +25,7 @@
 
 use crate::block::{BlockState, Palette};
 use crate::build::{BlockEntity, Build, Entity, Pos, Region, Size, checked_volume};
+use crate::formats::export::{ExportError, gzip, int};
 use crate::formats::{ImportError, decompress, double_triple, take};
 use crate::nbt::{self, Compound, Tag};
 
@@ -157,6 +158,197 @@ fn read_region(name: String, tag: Tag, palette: &mut Palette) -> Result<Region, 
     Ok(region)
 }
 
+/// Version written when the build does not come from a Litematica file.
+const DEFAULT_VERSION: i32 = 6;
+const DEFAULT_SUB_VERSION: i32 = 1;
+
+/// Writes a gzip-compressed Litematica schematic, one Litematica region per region. Data read
+/// from a Litematica file (version, timestamps, preview, scheduled ticks, which corner each region
+/// was defined from) is written back.
+pub fn write(build: &Build) -> Result<Vec<u8>, ExportError> {
+    let mut root = build
+        .extra
+        .get(EXTRA_KEY)
+        .and_then(Tag::as_compound)
+        .cloned()
+        .unwrap_or_default();
+    // Version of the original file, or the default one (with its sub-version) for other builds.
+    let version = match root.remove("Version").and_then(|t| t.as_int()) {
+        Some(version) => version,
+        None => {
+            root.insert("SubVersion", DEFAULT_SUB_VERSION);
+            DEFAULT_VERSION
+        }
+    };
+
+    let mut regions = Compound::new();
+    let mut used_names = Vec::new();
+    for (i, region) in build.regions.iter().enumerate() {
+        let mut name = if region.name.is_empty() {
+            format!("Region {}", i + 1)
+        } else {
+            region.name.clone()
+        };
+        // Region names are compound keys: they must be unique.
+        let base = name.clone();
+        let mut n = 2;
+        while used_names.contains(&name) {
+            name = format!("{base} ({n})");
+            n += 1;
+        }
+        used_names.push(name.clone());
+        regions.insert(name, region_to_nbt(region, build));
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
+    let total_blocks: u64 = build
+        .regions
+        .iter()
+        .flat_map(|r| r.blocks())
+        .filter(|&&b| build.palette.get(b).is_some_and(|s| !s.is_air()))
+        .count() as u64;
+    let total_volume: u64 = build.regions.iter().map(|r| r.size().volume()).sum();
+    let enclosing = build.bounds().map_or([0; 3], |(min, max)| {
+        [max.x - min.x + 1, max.y - min.y + 1, max.z - min.z + 1]
+    });
+
+    let mut metadata = root
+        .remove("Metadata")
+        .and_then(Tag::into_compound)
+        .unwrap_or_default();
+    metadata.insert("Name", build.metadata.name.as_str());
+    metadata.insert("Author", build.metadata.author.as_str());
+    metadata.insert("Description", build.metadata.description.as_str());
+    metadata.insert("RegionCount", int(build.regions.len() as u32));
+    metadata.insert(
+        "TotalBlocks",
+        int(total_blocks.min(u64::from(u32::MAX)) as u32),
+    );
+    metadata.insert(
+        "TotalVolume",
+        int(total_volume.min(u64::from(u32::MAX)) as u32),
+    );
+    metadata.insert("EnclosingSize", xyz_compound(enclosing));
+    if metadata.get("TimeCreated").is_none() {
+        metadata.insert("TimeCreated", now);
+    }
+    metadata.insert("TimeModified", now);
+
+    root.insert("Version", version);
+    root.insert("MinecraftDataVersion", build.data_version);
+    root.insert("Metadata", metadata);
+    root.insert("Regions", regions);
+    gzip(&nbt::write("", &root)?)
+}
+
+fn region_to_nbt(region: &Region, build: &Build) -> Compound {
+    let mut entry = region
+        .extra
+        .get(EXTRA_KEY)
+        .and_then(Tag::as_compound)
+        .cloned()
+        .unwrap_or_default();
+    let size = region.size();
+    let absolute = [int(size.x), int(size.y), int(size.z)];
+    let origin = [region.origin.x, region.origin.y, region.origin.z];
+    // Keep the corner the region was defined from, if it still describes this region.
+    let signed = match (
+        entry.remove("Position").and_then(xyz),
+        entry.remove("Size").and_then(xyz),
+    ) {
+        (Some(position), Some(signed_size))
+            if signed_size.map(|s| int(s.unsigned_abs())) == absolute
+                && (0..3).all(|i| {
+                    let min = if signed_size[i] < 0 {
+                        position[i].checked_add(signed_size[i] + 1)
+                    } else {
+                        Some(position[i])
+                    };
+                    min == Some(origin[i])
+                }) =>
+        {
+            (position, signed_size)
+        }
+        _ => (origin, absolute),
+    };
+
+    // Region palette: air first, then the states used.
+    let mut palette = vec![Tag::Compound(BlockState::air().to_nbt())];
+    let mut local: Vec<Option<usize>> = vec![None; build.palette.len()];
+    local[usize::from(Palette::AIR)] = Some(0);
+    let indices: Vec<usize> = region
+        .blocks()
+        .iter()
+        .map(|&block| {
+            *local[usize::from(block)].get_or_insert_with(|| {
+                let state = build
+                    .palette
+                    .get(block)
+                    .cloned()
+                    .unwrap_or_else(BlockState::air);
+                palette.push(Tag::Compound(state.to_nbt()));
+                palette.len() - 1
+            })
+        })
+        .collect();
+    let states = pack(&indices, palette.len());
+
+    let block_entities: Vec<Tag> = region
+        .block_entities
+        .iter()
+        .map(|be| {
+            let mut data = be.data.clone();
+            data.insert("x", be.pos.x);
+            data.insert("y", be.pos.y);
+            data.insert("z", be.pos.z);
+            if !be.id.is_empty() {
+                data.insert("id", be.id.as_str());
+            }
+            Tag::Compound(data)
+        })
+        .collect();
+    let entities: Vec<Tag> = region
+        .entities
+        .iter()
+        .map(|e| {
+            let mut data = e.data.clone();
+            data.insert("Pos", e.pos.map(Tag::Double).to_vec());
+            data.insert("id", e.id.as_str());
+            Tag::Compound(data)
+        })
+        .collect();
+
+    entry.insert("Position", xyz_compound(signed.0));
+    entry.insert("Size", xyz_compound(signed.1));
+    entry.insert("BlockStatePalette", palette);
+    entry.insert("BlockStates", states);
+    entry.insert("TileEntities", block_entities);
+    entry.insert("Entities", entities);
+    for key in ["PendingBlockTicks", "PendingFluidTicks"] {
+        if entry.get(key).is_none() {
+            entry.insert(key, Vec::<Tag>::new());
+        }
+    }
+    entry
+}
+
+/// Packs palette indices back to back on `bits_per_entry(palette_len)` bits, like Litematica.
+fn pack(indices: &[usize], palette_len: usize) -> Vec<i64> {
+    let bits = bits_per_entry(palette_len);
+    let mut longs = vec![0u64; (indices.len() * bits).div_ceil(64)];
+    for (i, &index) in indices.iter().enumerate() {
+        let bit = i * bits;
+        let (word, offset) = (bit / 64, bit % 64);
+        longs[word] |= (index as u64) << offset;
+        if offset + bits > 64 {
+            longs[word + 1] |= (index as u64) >> (64 - offset);
+        }
+    }
+    longs.into_iter().map(|l| l as i64).collect()
+}
+
 /// Bits per entry used by Litematica for a palette of `len` states.
 fn bits_per_entry(len: usize) -> usize {
     let bits = usize::BITS - len.saturating_sub(1).leading_zeros();
@@ -214,21 +406,6 @@ fn entity(tag: Tag) -> Option<Entity> {
 mod tests {
     use super::*;
     use crate::formats::test_util::gzip;
-
-    /// Inverse of `unpack`, as Litematica writes it.
-    fn pack(indices: &[usize], palette_len: usize) -> Vec<i64> {
-        let bits = bits_per_entry(palette_len);
-        let mut longs = vec![0u64; (indices.len() * bits).div_ceil(64)];
-        for (i, &index) in indices.iter().enumerate() {
-            let bit = i * bits;
-            let (word, offset) = (bit / 64, bit % 64);
-            longs[word] |= (index as u64) << offset;
-            if offset + bits > 64 {
-                longs[word + 1] |= (index as u64) >> (64 - offset);
-            }
-        }
-        longs.into_iter().map(|l| l as i64).collect()
-    }
 
     fn compound<const N: usize>(entries: [(&str, Tag); N]) -> Compound {
         entries.into_iter().collect()
@@ -533,6 +710,71 @@ mod tests {
             read(&encode(&document(overflow))),
             Err(ImportError::Field("Position"))
         ));
+    }
+
+    #[test]
+    fn written_files_read_back_the_same() {
+        let other = region(
+            [5, 0, 5],
+            [-2, 1, -3],
+            vec![state("minecraft:air", &[]), state("minecraft:glass", &[])],
+            &[1, 0, 1, 1, 0, 1],
+        );
+        let regions = compound([
+            ("main", Tag::Compound(main_region())),
+            ("annexe", Tag::Compound(other)),
+        ]);
+        let original = read(&encode(&document(regions))).unwrap();
+        let reread = read(&write(&original).unwrap()).unwrap();
+        assert!(reread.same_content(&original));
+        assert_eq!(reread.metadata, original.metadata);
+        let names: Vec<&str> = reread.regions.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["main", "annexe"]);
+        // The negative size is written back as it was.
+        let extra = reread.regions[1]
+            .extra
+            .get(EXTRA_KEY)
+            .and_then(Tag::as_compound)
+            .unwrap();
+        assert_eq!(
+            extra.get("Size"),
+            Some(&Tag::Compound(xyz_compound([-2, 1, -3])))
+        );
+        let metadata = reread
+            .extra
+            .get(EXTRA_KEY)
+            .and_then(Tag::as_compound)
+            .and_then(|e| e.get("Metadata"))
+            .and_then(Tag::as_compound)
+            .unwrap();
+        assert_eq!(
+            metadata.get("TimeCreated"),
+            Some(&Tag::Long(1_700_000_000_000))
+        );
+    }
+
+    #[test]
+    fn unnamed_and_duplicate_regions_get_unique_names() {
+        let mut build = read(&encode(&sample())).unwrap();
+        build.extra = Compound::new();
+        let mut copy = build.regions[0].clone();
+        copy.origin = Pos::new(10, 0, 0);
+        build.regions.push(copy);
+        build.regions[0].name.clear();
+        let mut third = build.regions[1].clone();
+        third.origin = Pos::new(20, 0, 0);
+        build.regions.push(third);
+        let reread = read(&write(&build).unwrap()).unwrap();
+        let mut names: Vec<&str> = reread.regions.iter().map(|r| r.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Region 1", "main", "main (2)"]);
+        assert!(reread.same_content(&build));
+        let extra = reread
+            .extra
+            .get(EXTRA_KEY)
+            .and_then(Tag::as_compound)
+            .unwrap();
+        assert_eq!(extra.get("Version"), Some(&Tag::Int(DEFAULT_VERSION)));
     }
 
     #[test]
