@@ -8,6 +8,7 @@ mod document;
 mod i18n;
 mod render3d;
 mod scene;
+mod shapes;
 mod view2d;
 mod view3d;
 
